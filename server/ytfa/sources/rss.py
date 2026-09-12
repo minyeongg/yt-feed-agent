@@ -109,8 +109,13 @@ def poll_all_channels(
             for channel_id, entries in zip(batch, pool.map(fetch_channel_feed, batch)):
                 fetched_total += len(entries)
                 new_total += _store_entries(conn, channel_id, entries)
+            # 배치마다 커밋한다 — 끝에 한 번만 커밋하면 채널 수백 개를 도는
+            # 동안(수십 초~분 단위) 쓰기 트랜잭션 하나가 계속 열려있어서,
+            # 그 사이 다른 스레드/프로세스가 쓰려고 하면 busy_timeout을
+            # 넘겨서까지 "database is locked"로 죽는다(실제로 겪은 버그 —
+            # 서버가 폴링 중일 때 /briefing/today가 500을 냈다).
+            conn.commit()
             if i + max_workers < len(channel_ids):
                 time.sleep(delay_sec)
 
-    conn.commit()
     return {"fetched": fetched_total, "new": new_total}

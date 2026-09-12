@@ -13,3 +13,7 @@ __pycache__/
 # OS
 .DS_Store
 
+# Extension build output & deps (extension/package-lock.json IS committed)
+extension/dist/
+extension/node_modules/
+

@@ -92,10 +92,40 @@ CREATE TABLE IF NOT EXISTS transcripts (
 );
 
 -- 검색 --------------------------------------------------------------
+-- 독립 FTS5 테이블이다(external content가 아니다) — channel_title이
+-- channels를 조인해야 나오는 값이라 videos의 실제 컬럼이 아니기
+-- 때문이다. external content(`content='videos'`) 모드는 색인의 모든
+-- 컬럼이 참조 테이블의 실제 컬럼이어야 하는데 이 스키마는 그 전제를
+-- 깬다 — 초기 설계 실수였고(어떤 쿼리를 던져도 "no such column:
+-- T.channel_title"로 즉시 깨진다), 그래서 text를 그대로 복제해 저장하는
+-- 독립 테이블로 바꿨다. 영상 몇천 건 규모에선 중복 저장 비용이 무시할
+-- 만하다.
 CREATE VIRTUAL TABLE IF NOT EXISTS videos_fts USING fts5(
-    id UNINDEXED, title, description, summary, channel_title,
-    content='videos', content_rowid='rowid'
+    id UNINDEXED, title, description, summary, channel_title
 );
+
+-- 자동으로 안 채워지므로 트리거로 직접 동기화한다(Phase 3 step 15,
+-- docs/03 §2.6). channel_title은 channels를 조인해서 채운다.
+CREATE TRIGGER IF NOT EXISTS videos_fts_ai AFTER INSERT ON videos BEGIN
+    INSERT INTO videos_fts(id, title, description, summary, channel_title)
+    VALUES (
+        new.id, new.title, new.description, new.summary,
+        (SELECT title FROM channels WHERE id = new.channel_id)
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS videos_fts_ad AFTER DELETE ON videos BEGIN
+    DELETE FROM videos_fts WHERE id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS videos_fts_au AFTER UPDATE ON videos BEGIN
+    DELETE FROM videos_fts WHERE id = old.id;
+    INSERT INTO videos_fts(id, title, description, summary, channel_title)
+    VALUES (
+        new.id, new.title, new.description, new.summary,
+        (SELECT title FROM channels WHERE id = new.channel_id)
+    );
+END;
 
 CREATE TABLE IF NOT EXISTS chunks (
     id         TEXT PRIMARY KEY,                -- "{video_id}:{seq}"
@@ -152,11 +182,52 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # 서버(FastAPI 요청 스레드)와 워커(APScheduler 백그라운드 스레드)가
+    # 같은 파일을 동시에 쓴다 — WAL이어도 "쓰기끼리"는 한 번에 하나뿐이라
+    # 기본값(0ms)이면 곧바로 "database is locked"로 죽는다. 몇 초 정도는
+    # 재시도하며 기다리게 한다(실제로 겪은 버그: 서버 기동 직후 워커가
+    # RSS 풀 폴링 중일 때 /briefing/today가 즉시 500을 냈다).
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
+def _backfill_fts_if_needed(conn: sqlite3.Connection) -> None:
+    """videos_fts_ai/au/ad 트리거는 새 행에만 적용된다 — 트리거가 생기기
+    전부터 있던 영상들은 한 번 수동으로 채워 넣어야 한다. `videos_fts`가
+    비어 있을 때만 실행해서 매 connect마다 반복하지 않는다."""
+    (fts_count,) = conn.execute("SELECT COUNT(*) FROM videos_fts").fetchone()
+    if fts_count > 0:
+        return
+    conn.execute(
+        """INSERT INTO videos_fts(id, title, description, summary, channel_title)
+           SELECT v.id, v.title, v.description, v.summary, c.title
+           FROM videos v JOIN channels c ON c.id = v.channel_id"""
+    )
+
+
+def _heal_stale_fts_schema(conn: sqlite3.Connection) -> None:
+    """옛(external content) `videos_fts` 정의가 남아있으면 지운다.
+
+    `CREATE ... IF NOT EXISTS`는 이미 존재하는(깨진) 정의를 그냥 둔다 —
+    그래서 SCHEMA_SQL을 실행하기 *전에* 먼저 건강 검진을 한다. 테이블이
+    아예 없는 최초 실행에서도 같은 예외가 나므로(둘 다 OperationalError)
+    분기 없이 동일하게 처리해도 안전하다 — `DROP ... IF EXISTS`는
+    아무것도 없을 때 그냥 조용히 넘어간다."""
+    try:
+        conn.execute("SELECT COUNT(*) FROM videos_fts")
+    except sqlite3.OperationalError:
+        conn.executescript(
+            """DROP TRIGGER IF EXISTS videos_fts_ai;
+               DROP TRIGGER IF EXISTS videos_fts_ad;
+               DROP TRIGGER IF EXISTS videos_fts_au;
+               DROP TABLE IF EXISTS videos_fts;"""
+        )
+
+
 def init_db(conn: sqlite3.Connection) -> None:
+    _heal_stale_fts_schema(conn)
     conn.executescript(SCHEMA_SQL)
+    _backfill_fts_if_needed(conn)
     conn.commit()
 
 

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "YT Feed Agent",
+  "version": "0.1.0",
+  "description": "구독 채널을 카테고리로 묶고, 새 영상을 관심도 순으로 브리핑하는 개인용 유튜브 도구",
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "YT Feed Agent"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content/inject.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8787/*"]
+}
