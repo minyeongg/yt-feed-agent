@@ -7,6 +7,9 @@
     "default_popup": "popup/popup.html",
     "default_title": "YT Feed Agent"
   },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
   "background": {
     "service_worker": "background.js"
   },
@@ -17,6 +20,6 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "sidePanel"],
   "host_permissions": ["http://127.0.0.1:8787/*"]
 }

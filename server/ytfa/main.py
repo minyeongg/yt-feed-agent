@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from ytfa.api.routes_agent import router as agent_router
 from ytfa.api.routes_briefing import router as briefing_router
 from ytfa.api.routes_categories import router as categories_router
 from ytfa.api.routes_feed import router as feed_router
@@ -68,6 +69,7 @@ app.include_router(feed_router)
 app.include_router(search_router)
 app.include_router(categories_router)
 app.include_router(briefing_router)
+app.include_router(agent_router)
 
 
 @app.get("/health", dependencies=[Depends(verify_token)])

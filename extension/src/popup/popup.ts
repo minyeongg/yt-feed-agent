@@ -153,4 +153,11 @@ searchInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") void runSearch(searchInput.value);
 });
 
+const openSidepanelBtn = document.getElementById("open-sidepanel-btn");
+openSidepanelBtn?.addEventListener("click", () => {
+  void chrome.windows.getCurrent().then((win) => {
+    if (win.id !== undefined) void chrome.sidePanel.open({ windowId: win.id });
+  });
+});
+
 void render();

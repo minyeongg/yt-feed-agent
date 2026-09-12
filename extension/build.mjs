@@ -9,12 +9,14 @@ import * as esbuild from "esbuild";
 
 rmSync("dist", { recursive: true, force: true });
 mkdirSync("dist/popup", { recursive: true });
+mkdirSync("dist/sidepanel", { recursive: true });
 
 await esbuild.build({
   entryPoints: {
     background: "src/background.ts",
     "content/inject": "src/content/inject.ts",
     "popup/popup": "src/popup/popup.ts",
+    "sidepanel/sidepanel": "src/sidepanel/sidepanel.ts",
   },
   outdir: "dist",
   bundle: true,
@@ -26,5 +28,6 @@ await esbuild.build({
 
 cpSync("manifest.json", "dist/manifest.json");
 cpSync("src/popup/popup.html", "dist/popup/popup.html");
+cpSync("src/sidepanel/sidepanel.html", "dist/sidepanel/sidepanel.html");
 
 console.log("빌드 완료 → extension/dist (chrome://extensions → 압축해제된 확장 프로그램 로드)");
