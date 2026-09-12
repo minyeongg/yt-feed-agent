@@ -1,0 +1,23 @@
+# Non-secret application settings.
+# Secrets (API keys) go in .env instead — see docs/03-API명세.md §5.2.
+
+data_dir: data
+
+server:
+  host: 127.0.0.1
+  port: 8787
+
+polling:
+  interval_min: 60 # FR-N1: RSS 폴링 주기(분)
+
+rag:
+  level: 0 # 0=FTS5만, 1=+요약 임베딩, 2=+자막 청킹 (ADR-7)
+  embedding_model: BAAI/bge-m3
+
+cost:
+  daily_limit_usd: 0.5 # FR-P6
+  monthly_limit_usd: 5.0
+
+llm:
+  small_model: claude-haiku-4-5-20251001 # 요약·분류·리랭킹
+  large_model: claude-sonnet-5 # 대화·계획

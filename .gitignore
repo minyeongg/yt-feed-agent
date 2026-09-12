@@ -1,1 +1,15 @@
 docs/**
+
+# Secrets & generated
+.env
+config/token
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+
