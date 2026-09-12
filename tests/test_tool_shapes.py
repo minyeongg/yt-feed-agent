@@ -1,15 +1,15 @@
-"""mcp_server/server.py 순수 로직 테스트 (docs/05-구현가이드.md Phase 5, step 20-21).
+"""tool_shapes.py 단위 테스트 (docs/03-API명세.md §3 "공통 규칙").
 
-라우터급 얇은 어댑터라(core 로직은 이미 core/*.py 테스트가 덮는다) 여기선
-포맷 변환·에러 래핑 같은 이 파일 고유 로직만 확인한다. 실제 8개 툴 호출은
-MCP Inspector로 실측 검증했다(DB 접근을 몽키패치하지 않고는 이 모듈을
-단위 테스트로 격리하기 어렵다 — REST 라우터를 curl로 검증한 것과 같은
-이유).
+`mcp_server/server.py`(Phase 5)와 `agent/tools_local.py`(Phase 6 step 22)
+둘 다 이 모듈을 쓴다 — 여기 로직이 맞으면 두 어댑터 다 맞다. 각 어댑터의
+실제 툴 호출은 MCP Inspector / 프리빌트 에이전트 실행으로 따로
+실측했다(DB 접근을 몽키패치하지 않고는 어댑터 자체를 단위 테스트로
+격리하기 어렵다 — REST 라우터를 curl로 검증한 것과 같은 이유).
 """
 
 from __future__ import annotations
 
-from ytfa.mcp_server.server import _parse_since_hours, _safe, _to_brief
+from ytfa.tool_shapes import parse_since_hours as _parse_since_hours, safe_tool as _safe, to_brief_video as _to_brief
 
 
 def test_parse_since_hours_days():

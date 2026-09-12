@@ -13,7 +13,12 @@ dependencies = [
     "fastapi>=0.141.1",
     "feedparser>=6.0.14",
     "google-api-python-client>=2.200.0",
-    "mcp>=2.2.0",
+    "langchain>=1.4.0",
+    "langchain-anthropic>=1.7.2",
+    "langchain-mcp-adapters>=0.3.1",
+    "langgraph>=1.2.11",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+    "mcp<2.0.0",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.3",
     "pyyaml>=6.0.3",
@@ -38,4 +43,8 @@ module-root = "server"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

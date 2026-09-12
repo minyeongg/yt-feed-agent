@@ -19,6 +19,13 @@ set_video_state)는 `ask`(사용자 승인) 대상이다(docs §3.2) — 다만 
 (`list_channels`/`recall`/`remember`/`get_cost_summary`/
 `summarize_videos`는 Phase 6·9에서 실제로 필요해질 때 추가한다).
 
+**`mcp<2.0.0`로 고정한 이유**: `mcp` SDK 2.x는 `FastMCP`를 `MCPServer`로
+개명하는 등 API가 바뀌었고, 이 파일은 원래 2.x로 만들어져 있었다. 하지만
+step 23에서 쓸 `langchain-mcp-adapters`(ADR-6이 지정한 MCP 클라이언트)가
+아직 `mcp<2.0.0`만 지원해서 — 최신 버전을 쓰다가 클라이언트 라이브러리와
+안 맞는 걸 뒤늦게 발견하고 여기서 1.x(`FastMCP`)로 내렸다. MCP 프로토콜
+자체는 SDK 버전과 무관하게 호환되므로 기능 손실은 없다.
+
 실행:
     uv run python -m ytfa.mcp_server.server
 확인(MCP Inspector):
@@ -27,12 +34,9 @@ set_video_state)는 `ask`(사용자 승인) 대상이다(docs §3.2) — 다만 
 
 from __future__ import annotations
 
-import functools
 import logging
-import re
-from typing import Any, Callable
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP
 
 from ytfa.core.categories import assign_category_to_channel, list_categories as _list_categories
 from ytfa.core.search import search_keyword
@@ -40,49 +44,11 @@ from ytfa.core.stats import get_watch_stats as _get_watch_stats
 from ytfa.core.videos import get_video_card, list_feed, set_video_state as _set_video_state
 from ytfa.db import get_connection
 from ytfa.sources.transcript import get_transcript_excerpt as _get_transcript_excerpt
+from ytfa.tool_shapes import parse_since_hours as _parse_since_hours, safe_tool as _safe, to_brief_video as _to_brief
 
 logger = logging.getLogger(__name__)
 
-mcp = MCPServer(name="ytfa", version="0.1.0")
-
-_SINCE_RE = re.compile(r"^(\d+)([dh])$")
-
-
-def _parse_since_hours(since: str, default_hours: int = 24 * 7) -> int:
-    """"7d"/"24h" 같은 문자열을 시간 단위로 바꾼다. 못 읽으면 기본값(7일)."""
-    match = _SINCE_RE.match(since.strip())
-    if not match:
-        return default_hours
-    value, unit = match.groups()
-    return int(value) * 24 if unit == "d" else int(value)
-
-
-def _safe(fn: Callable[..., dict]) -> Callable[..., dict]:
-    """예상 못 한 예외를 `{"error": "INTERNAL_ERROR", ...}`로 바꾼다(MCP 공통 규칙)."""
-
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> dict:
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 — 의도적으로 전부 잡는다(공통 규칙)
-            logger.exception("MCP tool '%s' 실패", fn.__name__)
-            return {"error": "INTERNAL_ERROR", "hint": str(exc)}
-
-    return wrapper
-
-
-def _to_brief(card: dict) -> dict:
-    """VideoCard(REST 전체형) → MCP 축약형(docs §3.1 예시 그대로)."""
-    return {
-        "id": card["id"],
-        "title": card["title"],
-        "channel": card["channel"]["title"],
-        "duration_sec": card["duration_sec"],
-        "published_at": card["published_at"],
-        "summary": card["summary"],
-        "state": card["state"],
-        "categories": card["categories"],
-    }
+mcp = FastMCP(name="ytfa")
 
 
 # --- 읽기 툴 (auto_allow) ---------------------------------------------
