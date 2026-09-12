@@ -50,7 +50,34 @@ def compute_cost_usd(
     return cost
 
 
-def _record_run(
+class CostLimitExceeded(Exception):
+    """일일/월간 비용 상한 초과(FR-P6, Phase 7 step 30). LLM 호출 전에 던진다."""
+
+    def __init__(self, scope: str, spent_usd: float, limit_usd: float):
+        self.scope = scope
+        self.spent_usd = spent_usd
+        self.limit_usd = limit_usd
+        super().__init__(f"{scope} 비용 상한 초과: ${spent_usd:.4f} / ${limit_usd:.2f}")
+
+
+def check_cost_limit(conn: Connection, cfg: Config | None = None) -> None:
+    """일일(최근 24시간)·월간(최근 30일) 상한을 넘었으면 `CostLimitExceeded`를 던진다.
+
+    실제 LLM 호출 **직전에** 불러야 한다 — 호출 후에 검사하면 이미 돈을
+    쓴 뒤라 상한의 의미가 없다. `LLMClient.call/parse`(단발 호출)와
+    `agent/streaming.py`(대화) 양쪽이 이 함수 하나를 공유한다 — 상한이
+    두 경로에 따로 적용되면 한쪽만 절반 지켜지는 셈이라 의미가 없다.
+    """
+    cfg = cfg or load_config()
+    daily_spent = cost_summary(conn, since_days=1)["total_usd"]
+    if daily_spent >= cfg.cost.daily_limit_usd:
+        raise CostLimitExceeded("일일", daily_spent, cfg.cost.daily_limit_usd)
+    monthly_spent = cost_summary(conn, since_days=30)["total_usd"]
+    if monthly_spent >= cfg.cost.monthly_limit_usd:
+        raise CostLimitExceeded("월간", monthly_spent, cfg.cost.monthly_limit_usd)
+
+
+def record_run(
     conn: Connection,
     *,
     kind: str,
@@ -105,7 +132,7 @@ class LLMClient:
         cost = compute_cost_usd(model, usage.input_tokens, usage.output_tokens, cache_read)
 
         if conn is not None:
-            _record_run(
+            record_run(
                 conn,
                 kind=kind,
                 user_input=user_input,
@@ -130,7 +157,9 @@ class LLMClient:
         conn: Connection | None = None,
         **kwargs: Any,
     ) -> tuple[Any, float]:
-        """단발 호출 1회 → (Anthropic Message, 비용 USD)."""
+        """단발 호출 1회 → (Anthropic Message, 비용 USD). 상한 넘었으면 `CostLimitExceeded`."""
+        if conn is not None:
+            check_cost_limit(conn, self.cfg)
         response = self.client.messages.create(
             model=model,
             system=system,
@@ -158,8 +187,11 @@ class LLMClient:
         """구조화 출력 호출 1회 → (`.parsed_output`이 붙은 Message, 비용 USD).
 
         step 9(categorize)·step 11(summarize)가 공통으로 쓰는 경로다 —
-        둘 다 자유 텍스트가 아니라 검증된 스키마가 필요하다.
+        둘 다 자유 텍스트가 아니라 검증된 스키마가 필요하다. 상한 넘었으면
+        `CostLimitExceeded`.
         """
+        if conn is not None:
+            check_cost_limit(conn, self.cfg)
         response = self.client.messages.parse(
             model=model,
             system=system,
@@ -196,3 +228,32 @@ def cost_summary(conn: Connection, since_days: int = 30) -> dict:
         ).fetchall()
     )
     return {"total_usd": round(total_usd, 6), "run_count": run_count, "by_kind": by_kind}
+
+
+def cost_summary_detailed(conn: Connection, cfg: Config | None = None, since_days: int = 30) -> dict:
+    """`GET /cost/summary`(docs §2.8, Phase 7 step 30)의 응답 그대로."""
+    cfg = cfg or load_config()
+    base = cost_summary(conn, since_days=since_days)
+
+    by_day_rows = conn.execute(
+        """SELECT date(started_at) AS d, COALESCE(SUM(cost_usd), 0)
+           FROM runs WHERE datetime(started_at) >= datetime('now', ?)
+           GROUP BY d ORDER BY d""",
+        (f"-{since_days} days",),
+    ).fetchall()
+    by_day = [{"date": r[0], "usd": round(r[1], 6)} for r in by_day_rows]
+
+    # throttled 여부는 check_cost_limit과 같은 기준(일일=최근 24h, 월간=최근 30일)으로 판단한다.
+    daily_spent = cost_summary(conn, since_days=1)["total_usd"]
+    monthly_spent = cost_summary(conn, since_days=30)["total_usd"]
+    throttled = daily_spent >= cfg.cost.daily_limit_usd or monthly_spent >= cfg.cost.monthly_limit_usd
+
+    limit_usd = cfg.cost.monthly_limit_usd
+    return {
+        "total_usd": base["total_usd"],
+        "limit_usd": limit_usd,
+        "remaining_usd": round(max(limit_usd - base["total_usd"], 0), 6),
+        "by_kind": base["by_kind"],
+        "by_day": by_day,
+        "throttled": throttled,
+    }

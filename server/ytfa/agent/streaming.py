@@ -1,4 +1,4 @@
-"""SSE 이벤트 스트리밍 (docs/05-구현가이드.md Phase 6, step 25-28; docs/03 §2.7).
+"""SSE 이벤트 스트리밍 (docs/05-구현가이드.md Phase 6, step 25-28; Phase 7 step 29-30; docs/03 §2.7, §5.3).
 
 `graph.astream_events()`(LangGraph v2 이벤트 스트림, 실측 확인: 모델
 토큰은 `on_chat_model_stream`, 툴 실행은 `on_tool_start`/`on_tool_end`,
@@ -8,6 +8,14 @@
 결과 메시지들이 청크로 온다)를 API 계약의 이벤트(run_started/text/
 tool_call/tool_result/approval_required/compaction/run_end)로 바꾼다.
 `citations`(step 37)는 아직 없다.
+
+**Phase 7**: 이 함수가 곧 "에이전트 실행" 그 자체라 비용 추적(step 8,
+Phase 2)이 지금까지 안 닿아있던 지점이다 — `ChatAnthropic`은
+`llm/cost.py`의 `LLMClient`를 안 거친다. 여기서 직접 토큰·비용을
+집계해서 (1) `data/traces/{run_id}.jsonl`에 기록하고(step 29,
+`observability.py`) (2) `runs` 테이블에 `kind='chat'`으로 한 행 적립하고
+(step 8과 같은 테이블, `xba cost`가 그대로 잡는다) (3) 시작 전에 상한을
+넘었으면 그래프를 아예 안 돌린다(step 30, FR-P6).
 
 **`compaction` 이벤트의 `before_chars`/`after_chars`는 토큰이 아니라
 글자 수다.** docs §2.7 예시는 `before_tokens`/`after_tokens`인데,
@@ -27,12 +35,19 @@ tool_call/tool_result/approval_required/compaction/run_end)로 바꾼다.
 **모델 청크의 content는 문자열이 아니라 블록 리스트다**(`message_utils.
 extract_text`와 같은 이유 — Sonnet 5는 thinking/tool_use 블록이 섞여
 온다). `text` 이벤트로는 `type: "text"` 블록만 내보낸다.
+
+**툴 호출의 시작/끝 짝짓기는 우리 `seq`가 아니라 LangChain이 이벤트마다
+주는 자체 `run_id`로 한다** — 한 AIMessage가 툴을 여러 개 동시에
+부르면(parallel tool calls, 실측으로 흔히 봄) `on_tool_start`가 전부
+먼저 오고 `on_tool_end`가 나중에 뒤섞여 오는데, 바깥쪽 `seq` 하나만
+보고 짝지으면 전부 마지막 `seq`로 잘못 찍힌다.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import nullcontext
@@ -44,6 +59,8 @@ from langgraph.types import Command
 from ytfa.agent import approvals
 from ytfa.agent.permissions import requires_approval
 from ytfa.db import get_connection
+from ytfa.llm.cost import CostLimitExceeded, check_cost_limit, compute_cost_usd, record_run
+from ytfa.observability import Tracer
 
 _COMPACT_ORIGINAL_LEN_RE = re.compile(r"원본 (\d+)자")
 
@@ -55,6 +72,19 @@ class SSEEvent:
 
     def encode(self) -> str:
         return f"event: {self.event}\ndata: {json.dumps(self.data, ensure_ascii=False)}\n\n"
+
+
+@dataclass
+class _RunAccumulator:
+    """한 대화 턴에 걸쳐 누적하는 수치 — 트레이스·`runs` 적립용."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cost_usd: float = 0.0
+    llm_calls: int = 0
+    tool_calls: int = 0
+    final_text: str = ""
 
 
 def text_delta(chunk_content: Any) -> str | None:
@@ -126,20 +156,36 @@ def _extract_compaction(ev: dict) -> dict | None:
 
 
 async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None = None) -> AsyncIterator[SSEEvent]:
-    """대화 한 턴을 실행하며 SSE 이벤트를 순서대로 낸다. 승인 대기도 이 안에서 처리한다.
+    """대화 한 턴을 실행하며 SSE 이벤트를 순서대로 낸다. 승인 대기·비용 추적·상한도 이 안에서 처리한다.
 
     `conn`을 넘기면 그 커넥션을 그대로 쓴다(테스트에서 임시 DB를 주입하기
     위한 용도) — 안 넘기면 앱 DB에 직접 연다.
     """
     run_id = f"r_{uuid.uuid4().hex[:12]}"
+    tracer = Tracer(run_id)
+    run_start = time.monotonic()
+    acc = _RunAccumulator()
+
     yield SSEEvent("run_started", {"run_id": run_id, "thread_id": thread_id})
 
     seq = 0
-    steps = 0
     stopped_reason = "end_turn"
     config = {"configurable": {"thread_id": thread_id}}
 
     with (nullcontext(conn) if conn is not None else get_connection()) as conn:
+        # 상한(FR-P6, step 30) — 그래프를 아예 안 돌린다. 호출 후에 검사하면
+        # 이미 돈을 쓴 뒤라 의미가 없다.
+        try:
+            check_cost_limit(conn)
+        except CostLimitExceeded as exc:
+            yield SSEEvent("text", {"delta": f"\n[비용 상한 초과 — {exc}]"})
+            yield SSEEvent("run_end", {"run_id": run_id, "steps": 0, "stopped_reason": "cost_limit_reached"})
+            tracer.run_end(
+                steps=0, stopped_reason="cost_limit_reached", total_cost_usd=0.0,
+                total_latency_ms=(time.monotonic() - run_start) * 1000,
+            )
+            return
+
         # 그래프 자체가 승인 지점에 멈춰있는지 직접 물어본다 — 우리 장부
         # (pending_approvals)만 보고 판단하면 "이미 결정은 났는데 그래프엔
         # 아직 Command(resume=...)를 안 넣어준" 상태(서버가 죽어서
@@ -151,7 +197,7 @@ async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None
             if latest is None:
                 stopped_reason = "error"
                 yield SSEEvent("text", {"delta": "\n[오류: 승인 대기 상태인데 기록을 못 찾음]"})
-                yield SSEEvent("run_end", {"run_id": run_id, "steps": steps, "stopped_reason": stopped_reason})
+                yield SSEEvent("run_end", {"run_id": run_id, "steps": 0, "stopped_reason": stopped_reason})
                 return
             if latest["decision"] is None:
                 seq += 1
@@ -167,6 +213,9 @@ async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None
         else:
             graph_input = {"messages": [{"role": "user", "content": message}]}
 
+        tool_call_meta: dict[str, dict] = {}  # LangChain 자체 run_id → {"seq", "start", "tool"}
+        llm_call_start: float | None = None
+
         try:
             while True:
                 interrupt_payload: dict | None = None
@@ -177,31 +226,65 @@ async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None
                         break
 
                     kind = ev["event"]
-                    if kind == "on_chat_model_stream":
+                    if kind == "on_chat_model_start":
+                        llm_call_start = time.monotonic()
+                    elif kind == "on_chat_model_stream":
                         delta = text_delta(ev["data"]["chunk"].content)
                         if delta:
+                            acc.final_text += delta
                             yield SSEEvent("text", {"delta": delta})
+                    elif kind == "on_chat_model_end":
+                        latency_ms = (time.monotonic() - llm_call_start) * 1000 if llm_call_start else 0.0
+                        llm_call_start = None
+                        output = ev["data"].get("output")
+                        usage = getattr(output, "usage_metadata", None) or {}
+                        resp_meta = getattr(output, "response_metadata", None) or {}
+                        model_name = resp_meta.get("model_name") or ""
+                        input_tokens = usage.get("input_tokens", 0) or 0
+                        output_tokens = usage.get("output_tokens", 0) or 0
+                        cache_read = (usage.get("input_token_details") or {}).get("cache_read", 0) or 0
+                        try:
+                            call_cost = compute_cost_usd(model_name, input_tokens, output_tokens, cache_read)
+                        except KeyError:
+                            call_cost = 0.0  # 단가표에 없는 모델 — 트레이스엔 남기되 조용히 0원 처리
+                        acc.input_tokens += input_tokens
+                        acc.output_tokens += output_tokens
+                        acc.cache_read_tokens += cache_read
+                        acc.cost_usd += call_cost
+                        acc.llm_calls += 1
+                        tracer.llm_call(
+                            model=model_name, input_tokens=input_tokens, output_tokens=output_tokens,
+                            cache_read_tokens=cache_read, latency_ms=latency_ms,
+                            stop_reason=resp_meta.get("stop_reason"), cost_usd=call_cost,
+                        )
                     elif kind == "on_tool_start":
                         seq += 1
-                        tool_name = ev["name"]
+                        tool_call_meta[ev["run_id"]] = {"seq": seq, "start": time.monotonic(), "tool": ev["name"]}
                         yield SSEEvent(
                             "tool_call",
                             {
                                 "seq": seq,
-                                "tool": tool_name,
+                                "tool": ev["name"],
                                 "args_summary": ev["data"].get("input", {}),
-                                "decision": "user_allowed" if requires_approval(tool_name) else "auto_allow",
+                                "decision": "user_allowed" if requires_approval(ev["name"]) else "auto_allow",
                             },
                         )
                     elif kind == "on_tool_end":
-                        steps += 1
-                        yield SSEEvent(
-                            "tool_result",
-                            {"seq": seq, "ok": True, "result_size": result_size(ev["data"].get("output"))},
+                        meta = tool_call_meta.pop(ev["run_id"], None)
+                        call_seq = meta["seq"] if meta else seq
+                        latency_ms = (time.monotonic() - meta["start"]) * 1000 if meta else 0.0
+                        size = result_size(ev["data"].get("output"))
+                        acc.tool_calls += 1
+                        tracer.tool_call(
+                            tool=(meta or {}).get("tool", ev.get("name", "")), args_summary={},
+                            decision="user_allowed" if requires_approval(ev.get("name", "")) else "auto_allow",
+                            latency_ms=latency_ms, result_size=size, error=None,
                         )
+                        yield SSEEvent("tool_result", {"seq": call_seq, "ok": True, "result_size": size})
                     elif kind == "on_chain_stream" and ev.get("name") == "compact":
                         compaction = _extract_compaction(ev)
                         if compaction:
+                            tracer.compaction(**compaction)
                             yield SSEEvent("compaction", compaction)
 
                 if interrupt_payload is None:
@@ -220,5 +303,19 @@ async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None
         except Exception as exc:  # noqa: BLE001 — 스트림 도중 예외도 정상적으로 run_end까지 보내야 한다
             stopped_reason = "error"
             yield SSEEvent("text", {"delta": f"\n[오류: {exc}]"})
+
+        total_latency_ms = (time.monotonic() - run_start) * 1000
+        steps = acc.llm_calls + acc.tool_calls
+        try:
+            record_run(
+                conn, kind="chat", user_input=message[:200], summary=acc.final_text[:200] or None,
+                input_tokens=acc.input_tokens, output_tokens=acc.output_tokens,
+                cache_read_tokens=acc.cache_read_tokens, cost_usd=acc.cost_usd, stopped_reason=stopped_reason,
+            )
+        except Exception:  # noqa: BLE001 — 기록 실패가 응답 자체를 막으면 안 된다(트레이서와 같은 원칙)
+            pass
+        tracer.run_end(
+            steps=steps, stopped_reason=stopped_reason, total_cost_usd=acc.cost_usd, total_latency_ms=total_latency_ms
+        )
 
     yield SSEEvent("run_end", {"run_id": run_id, "steps": steps, "stopped_reason": stopped_reason})

@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ytfa.api.routes_agent import router as agent_router
 from ytfa.api.routes_briefing import router as briefing_router
 from ytfa.api.routes_categories import router as categories_router
+from ytfa.api.routes_cost import router as cost_router
 from ytfa.api.routes_feed import router as feed_router
 from ytfa.api.routes_search import router as search_router
 from ytfa.config import load_config
@@ -70,6 +71,7 @@ app.include_router(search_router)
 app.include_router(categories_router)
 app.include_router(briefing_router)
 app.include_router(agent_router)
+app.include_router(cost_router)
 
 
 @app.get("/health", dependencies=[Depends(verify_token)])
