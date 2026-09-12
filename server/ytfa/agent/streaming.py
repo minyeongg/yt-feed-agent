@@ -1,12 +1,20 @@
-"""SSE 이벤트 스트리밍 (docs/05-구현가이드.md Phase 6, step 25-26; docs/03 §2.7).
+"""SSE 이벤트 스트리밍 (docs/05-구현가이드.md Phase 6, step 25-28; docs/03 §2.7).
 
 `graph.astream_events()`(LangGraph v2 이벤트 스트림, 실측 확인: 모델
 토큰은 `on_chat_model_stream`, 툴 실행은 `on_tool_start`/`on_tool_end`,
 `interrupt()`는 이름이 `"LangGraph"`인 체인의 `on_chain_stream`에
-`{"__interrupt__": (Interrupt(...),)}` 청크로 온다)를 API 계약의
-이벤트(run_started/text/tool_call/tool_result/approval_required/
-run_end)로 바꾼다. `compaction`(step 28)/`citations`(step 37)는 아직
-없다.
+`{"__interrupt__": (Interrupt(...),)}` 청크로 온다, `compact` 노드가
+실제로 압축했으면 이름이 `"compact"`인 체인의 `on_chain_stream`에 그
+결과 메시지들이 청크로 온다)를 API 계약의 이벤트(run_started/text/
+tool_call/tool_result/approval_required/compaction/run_end)로 바꾼다.
+`citations`(step 37)는 아직 없다.
+
+**`compaction` 이벤트의 `before_chars`/`after_chars`는 토큰이 아니라
+글자 수다.** docs §2.7 예시는 `before_tokens`/`after_tokens`인데,
+정확한 토큰 수를 세려면 토크나이저 의존성이 추가로 필요하다 — 있지도
+않은 정밀도를 있는 척하느니 글자 수로 정직하게 근사한다
+(`agent/nodes.py`의 `_compact_summary`가 압축 문자열 안에 "원본 N자"를
+남겨두고, 여기서 그걸 다시 읽어낸다).
 
 **승인 대기 중에도 연결이 끊기지 않는다**(docs §2.7 "스트림은 끊기지
 않는다") — `interrupt()`를 만나면 `approval_required`를 내보내고 그
@@ -24,6 +32,7 @@ extract_text`와 같은 이유 — Sonnet 5는 thinking/tool_use 블록이 섞�
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import nullcontext
@@ -35,6 +44,8 @@ from langgraph.types import Command
 from ytfa.agent import approvals
 from ytfa.agent.permissions import requires_approval
 from ytfa.db import get_connection
+
+_COMPACT_ORIGINAL_LEN_RE = re.compile(r"원본 (\d+)자")
 
 
 @dataclass
@@ -88,6 +99,30 @@ def _extract_interrupt(ev: dict) -> dict | None:
         return None
     interrupts = chunk["__interrupt__"]
     return interrupts[0].value if interrupts else None
+
+
+def _extract_compaction(ev: dict) -> dict | None:
+    """`compact` 노드가 실제로 뭔가 압축했으면 그 요약을, 아니면 None을 반환한다."""
+    if ev["event"] != "on_chain_stream" or ev.get("name") != "compact":
+        return None
+    chunk = ev["data"].get("chunk")
+    messages = chunk.get("messages") if isinstance(chunk, dict) else None
+    if not messages:
+        return None
+
+    before_chars = 0
+    after_chars = 0
+    for msg in messages:
+        content = getattr(msg, "content", "")
+        if not isinstance(content, str):
+            continue
+        after_chars += len(content)
+        match = _COMPACT_ORIGINAL_LEN_RE.search(content)
+        if match:
+            before_chars += int(match.group(1))
+    if after_chars == 0:
+        return None
+    return {"compacted_count": len(messages), "before_chars": before_chars, "after_chars": after_chars}
 
 
 async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None = None) -> AsyncIterator[SSEEvent]:
@@ -164,6 +199,10 @@ async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None
                             "tool_result",
                             {"seq": seq, "ok": True, "result_size": result_size(ev["data"].get("output"))},
                         )
+                    elif kind == "on_chain_stream" and ev.get("name") == "compact":
+                        compaction = _extract_compaction(ev)
+                        if compaction:
+                            yield SSEEvent("compaction", compaction)
 
                 if interrupt_payload is None:
                     break  # 정상 종료 — 더 이상 재개할 게 없다

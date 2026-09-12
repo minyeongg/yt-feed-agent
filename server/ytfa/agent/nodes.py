@@ -14,7 +14,10 @@
 감싼다(ADR-11) — "툴 바인딩은 프레임워크, 툴 결과를 어떻게 다룰지는
 우리 정책"이라는 ADR-6의 역할 분담 그대로다.
 
-**`compact`는 아직 통과만 한다** — 실제 로직은 step 28.
+**`compact`(step 28)**: 오래된 툴 결과(`ToolMessage`)를 짧은 요약
+문자열로 치환한다. 최근 `COMPACT_KEEP_RECENT`건과 사용자 메시지는
+그대로 둔다. LLM을 안 쓴다 — 전문을 잘라서 "이만큼 압축했다"는 표시만
+남기는 구조적 압축이다(비용 0, ADR-8과 같은 절약 원칙).
 """
 
 from __future__ import annotations
@@ -29,6 +32,10 @@ from ytfa.agent.permissions import requires_approval, summarize_tool_call
 from ytfa.agent.prompts import SYSTEM_PROMPT
 from ytfa.agent.state import AgentState
 from ytfa.security import sanitize_tool_message_content
+
+COMPACT_KEEP_RECENT = 3
+COMPACT_PREVIEW_CHARS = 120
+COMPACT_MARKER = "[이전 툴 결과 압축됨"
 
 
 def make_agent_node(model_with_tools) -> Callable[[AgentState], dict]:
@@ -106,9 +113,43 @@ def make_tools_node(tools: list) -> Callable[[AgentState], dict]:
     return tools_node
 
 
+def _tool_content_to_text(content: object) -> str:
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        return "".join(parts) or str(content)
+    return content if isinstance(content, str) else str(content)
+
+
+def _compact_summary(content: object) -> str:
+    text = _tool_content_to_text(content)
+    preview = text[:COMPACT_PREVIEW_CHARS]
+    return f"{COMPACT_MARKER} (원본 {len(text)}자)] {preview}..."
+
+
 def compact_node(state: AgentState) -> dict:
-    """컨텍스트 압축 자리. 실제 로직은 step 28에서 붙인다 — 지금은 통과."""
-    return {}
+    """오래된 툴 결과를 요약으로 치환한다. 최근 `COMPACT_KEEP_RECENT`건과
+    사용자 메시지는 그대로 둔다(docs step 28).
+
+    같은 `tool_call_id`를 유지한 채 `content`만 짧게 바꾼다 — 메시지를
+    지우거나(`RemoveMessage`) 순서를 바꾸지 않는다. AIMessage의
+    tool_calls가 참조하는 ToolMessage가 그대로 있어야 하는 langchain의
+    제약 때문이다.
+    """
+    messages = state["messages"]
+    tool_indices = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
+    if len(tool_indices) <= COMPACT_KEEP_RECENT:
+        return {}
+
+    to_compact = tool_indices[:-COMPACT_KEEP_RECENT]
+    updated: list[ToolMessage] = []
+    for i in to_compact:
+        msg = messages[i]
+        # 이미 압축된 건 다시 안 건드린다 — 재실행마다 더 짧아지는 걸 방지.
+        if isinstance(msg.content, str) and msg.content.startswith(COMPACT_MARKER):
+            continue
+        updated.append(msg.model_copy(update={"content": _compact_summary(msg.content)}))
+
+    return {"messages": updated} if updated else {}
 
 
 def route_after_agent(state: AgentState) -> str:
