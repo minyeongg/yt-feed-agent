@@ -157,6 +157,29 @@ async function request<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const token = await getToken();
+  if (!token) {
+    throw new ApiError("서버 토큰이 설정되지 않았습니다");
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method: "POST",
+      headers: { "X-YTFA-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError("로컬 서버에 연결할 수 없습니다");
+  }
+
+  if (!res.ok) {
+    throw new ApiError(`서버 오류 (${res.status})`, res.status);
+  }
+  return (await res.json()) as T;
+}
+
 export function checkHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/health");
 }
@@ -252,4 +275,9 @@ export async function* streamChat(message: string, threadId: string | null): Asy
       if (event) yield event;
     }
   }
+}
+
+// docs/05-구현가이드.md Phase 6 step 26 — 승인 다이얼로그의 응답.
+export function resolveApproval(approvalId: string, decision: "allow" | "deny"): Promise<{ ok: boolean }> {
+  return postJson<{ ok: boolean }>("/agent/approve", { approval_id: approvalId, decision });
 }

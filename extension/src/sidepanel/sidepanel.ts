@@ -10,6 +10,7 @@ import {
   clearThreadId,
   getThreadId,
   hasToken,
+  resolveApproval,
   setThreadId,
   setToken,
   streamChat,
@@ -52,6 +53,43 @@ function appendToolNote(text: string): void {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+// docs/05-구현가이드.md Phase 6 step 26 — 승인 다이얼로그.
+function appendApprovalDialog(approvalId: string, summary: string): void {
+  const el = document.createElement("div");
+  el.className = "approval-dialog";
+
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "summary";
+  summaryEl.textContent = `🛑 승인 필요: ${summary}`;
+  el.appendChild(summaryEl);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  const respond = (decision: "allow" | "deny", label: string) => {
+    el.classList.add("resolved");
+    summaryEl.textContent = `${decision === "allow" ? "✅" : "🚫"} ${summary} — ${label}`;
+    void resolveApproval(approvalId, decision).catch((err) => {
+      summaryEl.textContent += ` (전송 실패: ${err instanceof Error ? err.message : String(err)})`;
+    });
+  };
+
+  const allowBtn = document.createElement("button");
+  allowBtn.className = "allow-btn";
+  allowBtn.textContent = "허용";
+  allowBtn.addEventListener("click", () => respond("allow", "허용됨"));
+
+  const denyBtn = document.createElement("button");
+  denyBtn.className = "deny-btn";
+  denyBtn.textContent = "거부";
+  denyBtn.addEventListener("click", () => respond("deny", "거부됨"));
+
+  actions.append(allowBtn, denyBtn);
+  el.appendChild(actions);
+  messagesEl.appendChild(el);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
 async function sendMessage(message: string): Promise<void> {
   if (sending) return;
   sending = true;
@@ -82,10 +120,15 @@ async function sendMessage(message: string): Promise<void> {
     currentAssistantEl = null; // 다음 text는 새 말풍선에 — 시간 순서를 DOM 순서로 유지
   }
 
+  function onApprovalRequired(approvalId: string, summary: string): void {
+    appendApprovalDialog(approvalId, summary);
+    currentAssistantEl = null; // 같은 이유로 다음 text는 새 말풍선에
+  }
+
   try {
     const threadId = await getThreadId();
     for await (const event of streamChat(message, threadId)) {
-      handleEvent(event, onText, onToolCall);
+      handleEvent(event, onText, onToolCall, onApprovalRequired);
     }
   } catch (err) {
     appendToolNote(`오류: ${err instanceof Error ? err.message : String(err)}`);
@@ -95,7 +138,12 @@ async function sendMessage(message: string): Promise<void> {
   }
 }
 
-function handleEvent(event: ChatEvent, onText: (delta: string) => void, onToolCall: (tool: string) => void): void {
+function handleEvent(
+  event: ChatEvent,
+  onText: (delta: string) => void,
+  onToolCall: (tool: string) => void,
+  onApprovalRequired: (approvalId: string, summary: string) => void,
+): void {
   switch (event.event) {
     case "run_started": {
       const threadId = event.data.thread_id as string | undefined;
@@ -113,6 +161,10 @@ function handleEvent(event: ChatEvent, onText: (delta: string) => void, onToolCa
     }
     case "tool_result": {
       // tool_call 노트로 충분 — 결과는 최종 답변에 반영된다.
+      break;
+    }
+    case "approval_required": {
+      onApprovalRequired(event.data.approval_id as string, event.data.summary as string);
       break;
     }
     case "run_end": {

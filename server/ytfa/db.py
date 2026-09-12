@@ -174,6 +174,23 @@ CREATE TABLE IF NOT EXISTS runs (
     stopped_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
+
+-- 승인 대기 (Phase 6 step 26; docs §2.7 approval_required/§3.2 ask) -----
+-- 대화 스레드가 `ask` 등급 툴 앞에서 멈췄을 때의 상태. 메모리(asyncio
+-- Future)만으로는 서버 재시작 시 사라지므로, "재시작해도 재개된다"를
+-- 만족하려면 결정을 여기 영구 저장해야 한다 — /agent/chat이 재시작 후
+-- 다시 불려도 이 테이블을 보고 이미 결정된 걸 찾아 재개할 수 있다.
+CREATE TABLE IF NOT EXISTS pending_approvals (
+    id           TEXT PRIMARY KEY,   -- approval_id
+    thread_id    TEXT NOT NULL,
+    tool         TEXT NOT NULL,
+    args         TEXT NOT NULL,      -- JSON
+    summary      TEXT NOT NULL,
+    decision     TEXT,               -- NULL이면 아직 대기 중, 'allow'|'deny'
+    created_at   TEXT NOT NULL,
+    resolved_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pending_approvals_thread ON pending_approvals(thread_id);
 """
 
 
