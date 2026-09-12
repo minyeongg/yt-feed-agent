@@ -1,4 +1,4 @@
-"""그래프 노드 (docs/05-구현가이드.md Phase 6, step 24/26; docs/02 ADR-6).
+"""그래프 노드 (docs/05-구현가이드.md Phase 6, step 24/26/27; docs/02 ADR-6).
 
 프리빌트(step 22-23)를 4개 노드로 분해한다: `agent`(모델 호출) →
 `approve`(승인 게이트) → `tools`(툴 실행) → `compact`(컨텍스트 압축) →
@@ -6,9 +6,15 @@
 
 **`approve`(step 26)**: `ask` 등급 툴(permissions.py) 호출마다
 `interrupt()`로 멈춘다. 거부되면 그 tool_call을 AIMessage에서 빼고
-`DENIED_BY_USER` ToolMessage를 대신 끼워 넣는다 — `tools` 노드
-(ToolNode)가 거부된 걸 다시 실행하지 않게. **`compact`는 아직 통과만
-한다** — 실제 로직은 step 28.
+`DENIED_BY_USER` ToolMessage를 대신 끼워 넣는다 — `tools` 노드가 거부된
+걸 다시 실행하지 않게.
+
+**`tools`(step 27)**: 실제 실행은 `ToolNode`(프레임워크)에게 맡기되,
+결과가 상태에 들어가기 전에 `security.py`로 외부 텍스트를 격리 봉투에
+감싼다(ADR-11) — "툴 바인딩은 프레임워크, 툴 결과를 어떻게 다룰지는
+우리 정책"이라는 ADR-6의 역할 분담 그대로다.
+
+**`compact`는 아직 통과만 한다** — 실제 로직은 step 28.
 """
 
 from __future__ import annotations
@@ -16,11 +22,13 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from ytfa.agent.permissions import requires_approval, summarize_tool_call
 from ytfa.agent.prompts import SYSTEM_PROMPT
 from ytfa.agent.state import AgentState
+from ytfa.security import sanitize_tool_message_content
 
 
 def make_agent_node(model_with_tools) -> Callable[[AgentState], dict]:
@@ -72,6 +80,30 @@ def approve_node(state: AgentState) -> dict:
     remaining_calls = [tc for tc in last.tool_calls if tc["id"] not in denied_ids]
     updated_ai = last.model_copy(update={"tool_calls": remaining_calls})
     return {"messages": [updated_ai, *denial_messages]}
+
+
+def make_tools_node(tools: list) -> Callable[[AgentState], dict]:
+    """`ToolNode`로 실제 실행하고, 결과가 상태에 들어가기 전에 격리 봉투로 감싼다(step 27).
+
+    노드를 반드시 **async**로 만들어야 한다 — MCP 툴(step 23)은 서브프로세스를
+    띄우는 async 전용 `StructuredTool`이라, 동기 `.invoke()`로 부르면
+    "StructuredTool does not support sync invocation"으로 죽는다(실측
+    확인). 그래프 자체가 `ainvoke`/`astream_events`로만 도니(step 24)
+    async 노드로 바꿔도 다른 데는 영향 없다.
+    """
+    tool_node = ToolNode(tools)
+
+    async def tools_node(state: AgentState) -> dict:
+        result = await tool_node.ainvoke(state)
+        sanitized = [
+            msg.model_copy(update={"content": sanitize_tool_message_content(msg.content)})
+            if isinstance(msg, ToolMessage)
+            else msg
+            for msg in result["messages"]
+        ]
+        return {"messages": sanitized}
+
+    return tools_node
 
 
 def compact_node(state: AgentState) -> dict:

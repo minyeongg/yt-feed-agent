@@ -17,9 +17,8 @@ from pathlib import Path
 from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 
-from ytfa.agent.nodes import approve_node, compact_node, make_agent_node, route_after_agent
+from ytfa.agent.nodes import approve_node, compact_node, make_agent_node, make_tools_node, route_after_agent
 from ytfa.agent.state import AgentState
 from ytfa.config import load_config
 
@@ -37,7 +36,7 @@ def build_graph(tools: list, checkpointer: BaseCheckpointSaver | None = None):
     builder = StateGraph(AgentState)
     builder.add_node("agent", make_agent_node(model_with_tools))
     builder.add_node("approve", approve_node)
-    builder.add_node("tools", ToolNode(tools))
+    builder.add_node("tools", make_tools_node(tools))
     builder.add_node("compact", compact_node)
 
     builder.set_entry_point("agent")
