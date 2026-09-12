@@ -48,3 +48,6 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# 프로젝트 루트를 import 경로에 넣는다 — eval/run_retrieval.py(server/ 밖,
+# ytfa 패키지가 아니라 evaluation 스크립트) 테스트가 이걸 필요로 한다.
+pythonpath = ["."]

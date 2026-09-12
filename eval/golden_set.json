@@ -1,0 +1,122 @@
+[
+  {
+    "id": "q001",
+    "query": "레거시 개발자 고민",
+    "relevant_video_ids": ["3Mk12nCvzhg"],
+    "note": "제목은 '레거시는 걷어낼...' — 조사(는/을/를)가 붙어 정확 토큰이 어긋나는 흔한 케이스, L0가 못 맞히는 게 정상. L1(임베딩) 확인용"
+  },
+  {
+    "id": "q002",
+    "query": "GPT Image",
+    "relevant_video_ids": ["mWvhED861ts"],
+    "note": "제목에 영문 그대로 포함 — L0가 맞혀야 하는 쉬운 케이스"
+  },
+  {
+    "id": "q003",
+    "query": "눈치보는 습관",
+    "relevant_video_ids": ["9UrnSoepoY4"],
+    "note": "제목과 거의 겹침(단, '습관을'은 조사 때문에 따로는 안 걸림)"
+  },
+  {
+    "id": "q004",
+    "query": "반복되는 인간관계",
+    "relevant_video_ids": ["-N-9OuTQtqo"],
+    "note": "제목 '반복되는 인간관계는 우연이 아닙니다'와 겹침"
+  },
+  {
+    "id": "q005",
+    "query": "Telling Time",
+    "relevant_video_ids": ["75cHd-PIhGQ"],
+    "note": "영문 제목 그대로"
+  },
+  {
+    "id": "q006",
+    "query": "미국 ARS 영어",
+    "relevant_video_ids": ["u181xm692l8"],
+    "note": "제목 'ARS 안내영어'와 겹침"
+  },
+  {
+    "id": "q007",
+    "query": "탈북 여성 연애",
+    "relevant_video_ids": ["cFFX2ZT-MLQ"],
+    "note": "제목과 겹침"
+  },
+  {
+    "id": "q008",
+    "query": "명품의 도시",
+    "relevant_video_ids": ["GQEKTEBIGXk"],
+    "note": "제목과 정확히 겹침"
+  },
+  {
+    "id": "q009",
+    "query": "카시오",
+    "relevant_video_ids": ["4zCduI_9T7o"],
+    "note": "제목 '스마트워치가 있는데 왜 카시오를 찾나?'와 겹침 — 다른 시계 영상들과 섞여 순위는 낮게 나옴"
+  },
+  {
+    "id": "q010",
+    "query": "성공에 미친",
+    "relevant_video_ids": ["j9RP3SkvSLc"],
+    "note": "제목과 정확히 겹침"
+  },
+  {
+    "id": "q011",
+    "query": "상하이 출장 메이크업",
+    "relevant_video_ids": ["QNaO3Rc69ZE"],
+    "note": "제목과 겹침"
+  },
+  {
+    "id": "q012",
+    "query": "캐시미어 니트",
+    "relevant_video_ids": ["sbRiXMqV6ew"],
+    "note": "제목과 겹침"
+  },
+  {
+    "id": "q013",
+    "query": "촌스러워보일때",
+    "relevant_video_ids": ["LLR2xhrYxmA"],
+    "note": "제목의 복합어를 그대로 써야 걸림 — 띄어쓰면(예: '촌스러워 보일 때') 안 걸릴 가능성 높음. L0의 형태소 미분석 한계를 보여주는 케이스"
+  },
+  {
+    "id": "q014",
+    "query": "오버워치 그랜드마스터 랭크",
+    "relevant_video_ids": ["UzTBxIQ15FA"],
+    "note": "제목엔 커뮤니티 줄임말 '그마3'만 있음 — '그랜드마스터'로는 매칭 안 됨(의미 검색용, L0는 못 맞히는 게 정상)"
+  },
+  {
+    "id": "q015",
+    "query": "오버워치 광물 피드백",
+    "relevant_video_ids": ["1hpiLihg_Uc"],
+    "note": "제목과 정확히 겹침"
+  },
+  {
+    "id": "q016",
+    "query": "반미 샌드위치",
+    "relevant_video_ids": ["kr_dGE6o28E"],
+    "note": "제목과 겹침"
+  },
+  {
+    "id": "q017",
+    "query": "1인가구 브이로그",
+    "relevant_video_ids": ["Cglso-oGtXM"],
+    "note": "제목과 겹침"
+  },
+  {
+    "id": "q018",
+    "query": "이사하는 날",
+    "relevant_video_ids": ["_EJ_-axvoHQ"],
+    "note": "제목과 정확히 겹침"
+  },
+  {
+    "id": "q019",
+    "query": "광주담양",
+    "relevant_video_ids": ["udr8CykOGPk"],
+    "note": "제목 안 지명과 겹침"
+  },
+  {
+    "id": "q020",
+    "query": "파바로티 스팅",
+    "relevant_video_ids": ["el_dsklJVEg"],
+    "note": "제목에 나열된 성악가 이름과 겹침"
+  }
+]
