@@ -17,6 +17,7 @@ from ytfa.sources.transcript import (
     TranscriptResult,
     fetch_and_store_transcript,
     fetch_pending_transcripts,
+    get_transcript_excerpt,
 )
 
 
@@ -100,3 +101,48 @@ def test_fetch_pending_transcripts_mixed_results_no_crash(conn):
     # pending이 하나도 안 남아야 재실행 시 다시 안 건드린다
     remaining = conn.execute("SELECT COUNT(*) FROM videos WHERE transcript_status = 'pending'").fetchone()[0]
     assert remaining == 0
+
+
+def test_get_transcript_excerpt_returns_window(conn):
+    provider = FakeProvider({
+        "v_ok": TranscriptResult(
+            segments=[
+                {"start": 0.0, "dur": 5.0, "text": "인트로"},
+                {"start": 100.0, "dur": 5.0, "text": "본론 시작"},
+                {"start": 300.0, "dur": 5.0, "text": "결론"},
+            ],
+            lang="ko",
+            is_auto=True,
+        ),
+    })
+    fetch_and_store_transcript(conn, "v_ok", provider)
+
+    result = get_transcript_excerpt(conn, "v_ok", start_sec=90, window_sec=60)
+
+    assert result["text"] == "본론 시작"
+    assert result["segment_count"] == 1
+    assert "인트로" not in result["text"]
+    assert "결론" not in result["text"]
+
+
+def test_get_transcript_excerpt_defaults_to_beginning(conn):
+    provider = FakeProvider({
+        "v_ok": TranscriptResult(
+            segments=[{"start": 0.0, "dur": 5.0, "text": "인트로"}], lang="ko", is_auto=True
+        ),
+    })
+    fetch_and_store_transcript(conn, "v_ok", provider)
+
+    result = get_transcript_excerpt(conn, "v_ok")
+    assert result["start_sec"] == 0
+    assert "인트로" in result["text"]
+
+
+def test_get_transcript_excerpt_no_transcript_returns_error(conn):
+    result = get_transcript_excerpt(conn, "v_none")
+    assert result["error"] == "TRANSCRIPT_UNAVAILABLE"
+
+
+def test_get_transcript_excerpt_unknown_video_returns_not_found(conn):
+    result = get_transcript_excerpt(conn, "totally-unknown")
+    assert result["error"] == "NOT_FOUND"

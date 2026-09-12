@@ -64,13 +64,18 @@ def _candidate_videos(conn: Connection, since_hours: int, include_shorts: bool) 
     `video_states` 행이 아직 하나도 안 생기는 초기 상태(Phase 3 REST가
     붙기 전)도 정상 동작하도록 `LEFT JOIN`으로 상태 없음(=새 영상)을
     허용한다.
+
+    `published_at`을 `datetime()`으로 감싸는 이유: 우리가 저장한 ISO
+    문자열과 sqlite의 `datetime('now', ...)` 출력 형식이 달라서, 안
+    감싸면 같은 날짜의 과거 시각도 "범위 안"으로 잘못 걸린다(실측 버그,
+    Phase 5에서 core/stats.py 만들다가 발견 — cost.py에도 있었다).
     """
     kind_filter = "" if include_shorts else "AND v.kind != 'short'"
     rows = conn.execute(
         f"""SELECT v.id, v.title, v.channel_id
             FROM videos v
             LEFT JOIN video_states vs ON vs.video_id = v.id
-            WHERE v.published_at >= datetime('now', ?)
+            WHERE datetime(v.published_at) >= datetime('now', ?)
             AND (vs.state IS NULL OR vs.state = 'new')
             {kind_filter}
             ORDER BY v.published_at DESC""",

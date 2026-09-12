@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ytfa.core.videos import feed_counts, list_feed
+from ytfa.core.videos import feed_counts, get_video_card, list_feed, set_video_state
 from ytfa.db import init_db
 
 
@@ -98,3 +98,45 @@ def test_feed_counts_by_category(conn):
 def test_feed_counts_watched_state(conn):
     result = feed_counts(conn, state="watched")
     assert result["total"] == 1
+
+
+def test_list_feed_since_hours_excludes_old_videos(conn):
+    conn.execute(
+        """INSERT INTO videos (id, channel_id, title, published_at, discovered_at)
+           VALUES ('v_old', 'UC1', '오래된 영상', datetime('now', '-100 hours'), datetime('now'))"""
+    )
+    conn.commit()
+
+    result = list_feed(conn, since_hours=48)
+    ids = {item["id"] for item in result["items"]}
+    assert "v_new" in ids
+    assert "v_old" not in ids
+
+
+def test_get_video_card_returns_none_for_unknown(conn):
+    assert get_video_card(conn, "nope") is None
+
+
+def test_get_video_card_matches_list_feed_shape(conn):
+    card = get_video_card(conn, "v_new")
+    assert card["id"] == "v_new"
+    assert card["channel"]["id"] == "UC1"
+    assert card["categories"] == ["dev"]
+
+
+def test_set_video_state_upserts_and_signals_index_queue(conn):
+    result = set_video_state(conn, "v_new", "watched", watch_seconds=120)
+    assert result == {"ok": True, "queued_for_index": True}
+
+    row = conn.execute("SELECT state, watch_seconds FROM video_states WHERE video_id='v_new'").fetchone()
+    assert tuple(row) == ("watched", 120)
+
+    # 상태를 바꿔도(watched가 아니면) queued_for_index는 False
+    result2 = set_video_state(conn, "v_new", "skipped")
+    assert result2 == {"ok": True, "queued_for_index": False}
+
+
+def test_set_video_state_unknown_video_returns_error(conn):
+    result = set_video_state(conn, "nope", "watched")
+    assert result["ok"] is False
+    assert result["error"] == "NOT_FOUND"

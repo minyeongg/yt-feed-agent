@@ -130,3 +130,37 @@ def fetch_pending_transcripts(
         status = fetch_and_store_transcript(conn, video_id, provider)
         counts[status] += 1
     return {"processed": len(video_ids), **counts}
+
+
+def get_transcript_excerpt(
+    conn: Connection,
+    video_id: str,
+    start_sec: float | None = None,
+    window_sec: float = 120,
+) -> dict:
+    """`start_sec`부터 `window_sec`초 구간의 자막만 잘라 돌려준다(docs §3.1).
+
+    **자막 전문을 통째로 주지 않는다** — 에이전트는 검색으로 위치를
+    찾고 그 주변만 읽어야 컨텍스트·비용이 지켜진다. 실패는 예외가
+    아니라 `{"error": ...}`로 돌아간다(MCP 공통 규칙).
+    """
+    row = conn.execute("SELECT segments, lang FROM transcripts WHERE video_id = ?", (video_id,)).fetchone()
+    if row is None:
+        video_row = conn.execute("SELECT transcript_status FROM videos WHERE id = ?", (video_id,)).fetchone()
+        if video_row is None:
+            return {"error": "NOT_FOUND", "hint": f"video '{video_id}' 없음"}
+        return {"error": "TRANSCRIPT_UNAVAILABLE", "hint": f"transcript_status={video_row[0]}"}
+
+    segments = json.loads(row[0])
+    start = start_sec if start_sec is not None else 0
+    end = start + window_sec
+    matched = [s for s in segments if start <= s["start"] < end]
+
+    return {
+        "video_id": video_id,
+        "lang": row[1],
+        "start_sec": start,
+        "window_sec": window_sec,
+        "text": " ".join(s["text"] for s in matched),
+        "segment_count": len(matched),
+    }

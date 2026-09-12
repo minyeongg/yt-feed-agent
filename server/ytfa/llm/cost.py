@@ -177,15 +177,21 @@ class LLMClient:
 
 def cost_summary(conn: Connection, since_days: int = 30) -> dict:
     """`xba cost` / 향후 `GET /cost/summary`(Phase 7 step 30)가 쓸 집계."""
+    # started_at은 우리가 저장한 ISO 문자열("...T...+00:00")이고
+    # datetime('now', ?)는 sqlite의 표준 출력("... ...", 공백 구분)이라,
+    # 감싸지 않고 그냥 >=로 비교하면 'T' > ' '라는 순전히 글자 비교 때문에
+    # 같은 날짜의 과거 시각도 전부 "이후"로 잘못 걸린다(실측 버그 —
+    # test_stats.py에서 처음 걸림). 저장된 값도 datetime()으로 다시
+    # 파싱해서 같은 정규형으로 맞춰야 제대로 비교된다.
     total_usd, run_count = conn.execute(
         """SELECT COALESCE(SUM(cost_usd), 0), COUNT(*)
-           FROM runs WHERE started_at >= datetime('now', ?)""",
+           FROM runs WHERE datetime(started_at) >= datetime('now', ?)""",
         (f"-{since_days} days",),
     ).fetchone()
     by_kind = dict(
         conn.execute(
             """SELECT kind, COALESCE(SUM(cost_usd), 0) FROM runs
-               WHERE started_at >= datetime('now', ?) GROUP BY kind""",
+               WHERE datetime(started_at) >= datetime('now', ?) GROUP BY kind""",
             (f"-{since_days} days",),
         ).fetchall()
     )

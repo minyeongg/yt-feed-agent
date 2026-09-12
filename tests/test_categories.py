@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ytfa.core.categories import list_categories
+from ytfa.core.categories import assign_category_to_channel, list_categories
 from ytfa.db import init_db
 
 
@@ -46,3 +46,31 @@ def test_list_categories_includes_counts_and_empty_ones(conn):
 def test_list_categories_ordered_by_ord(conn):
     items = list_categories(conn)
     assert [c["id"] for c in items] == ["dev", "etc"]
+
+
+def test_assign_category_replaces_and_locks(conn):
+    result = assign_category_to_channel(conn, "UC1", ["etc"])
+
+    assert result["category_ids"] == ["etc"]
+    assert result["category_locked"] is True
+
+    links = [
+        tuple(r) for r in conn.execute("SELECT category_id, assigned_by FROM channel_categories WHERE channel_id='UC1'").fetchall()
+    ]
+    assert links == [("etc", "user")]  # 기존 'dev' 자동 배정이 교체됨
+
+    locked = conn.execute("SELECT category_locked FROM channels WHERE id='UC1'").fetchone()[0]
+    assert locked == 1
+
+
+def test_assign_category_unknown_channel_returns_error(conn):
+    result = assign_category_to_channel(conn, "UC_NOPE", ["dev"])
+    assert result["error"] == "NOT_FOUND"
+
+
+def test_assign_category_unknown_category_returns_error(conn):
+    result = assign_category_to_channel(conn, "UC1", ["ghost"])
+    assert result["error"] == "NOT_FOUND"
+    # 실패했으면 기존 배정을 건드리지 않아야 한다
+    links = conn.execute("SELECT category_id FROM channel_categories WHERE channel_id='UC1'").fetchall()
+    assert [r[0] for r in links] == ["dev"]

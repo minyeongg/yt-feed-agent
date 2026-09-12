@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "feedparser>=6.0.14",
     "google-api-python-client>=2.200.0",
+    "mcp>=2.2.0",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.3",
     "pyyaml>=6.0.3",

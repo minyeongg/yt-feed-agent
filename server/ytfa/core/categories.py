@@ -36,3 +36,37 @@ def list_categories(conn: Connection) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def assign_category_to_channel(conn: Connection, channel_id: str, category_ids: list[str]) -> dict:
+    """사용자가 직접 카테고리를 지정한다(docs §2.2 `PATCH /channels`, §3.2 `assign_category`).
+
+    기존 배정(자동이든 수동이든)을 전부 교체하고 `category_locked=True`로
+    잠근다 — 이후 `llm/categorize.py`의 자동 재분류 대상에서 빠진다
+    (FR-K2: "사용자가 손댔으면 자동 재분류 금지").
+    """
+    channel = conn.execute("SELECT id, title FROM channels WHERE id = ?", (channel_id,)).fetchone()
+    if channel is None:
+        return {"error": "NOT_FOUND", "hint": f"channel '{channel_id}' 없음"}
+
+    known_ids = {r[0] for r in conn.execute("SELECT id FROM categories").fetchall()}
+    unknown = [c for c in category_ids if c not in known_ids]
+    if unknown:
+        return {"error": "NOT_FOUND", "hint": f"존재하지 않는 카테고리: {unknown}"}
+
+    conn.execute("DELETE FROM channel_categories WHERE channel_id = ?", (channel_id,))
+    for category_id in category_ids:
+        conn.execute(
+            "INSERT INTO channel_categories (channel_id, category_id, assigned_by, confidence) VALUES (?, ?, 'user', NULL)",
+            (channel_id, category_id),
+        )
+    conn.execute("UPDATE channels SET category_locked = 1, needs_review = 0 WHERE id = ?", (channel_id,))
+    conn.commit()
+
+    return {
+        "id": channel[0],
+        "title": channel[1],
+        "category_ids": category_ids,
+        "category_locked": True,
+        "assigned_by": "user",
+    }

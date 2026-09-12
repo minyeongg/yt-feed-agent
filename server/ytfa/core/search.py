@@ -22,24 +22,29 @@ def _to_fts_query(raw: str) -> str:
     return " ".join(f'"{t}"' for t in tokens)
 
 
-def search_keyword(conn: Connection, query: str, limit: int = 10) -> dict:
-    """`GET /search&mode=keyword` — 제목/설명/요약/채널명 전문검색(FR-R7)."""
+def search_keyword(conn: Connection, query: str, limit: int = 10, scope: str = "all") -> dict:
+    """`GET /search&mode=keyword` — 제목/설명/요약/채널명 전문검색(FR-R7).
+
+    `scope`(docs §2.6, MCP `search_videos` §3.1): `all`(기본) | `watched`
+    (시청 완료한 영상 안에서만). `video`(특정 영상 안에서 검색, FR-R6)는
+    자막 청킹(L2, Phase 8)이 있어야 의미가 있어서 아직 여기서 안 받는다
+    — 호출부가 NOT_IMPLEMENTED로 거절한다.
+    """
     fts_query = _to_fts_query(query)
     if not fts_query:
         return {"mode": "keyword", "query_used": query, "items": [], "hint": NO_RESULT_HINT}
 
-    rows = conn.execute(
-        """SELECT v.id, v.title, v.channel_id, c.title, v.thumbnail_url,
+    query_sql = """SELECT v.id, v.title, v.channel_id, c.title, v.thumbnail_url,
                   v.published_at, v.duration_sec, v.kind, v.summary, v.verdict,
                   bm25(videos_fts) AS rank
            FROM videos_fts
            JOIN videos v ON v.id = videos_fts.id
-           JOIN channels c ON c.id = v.channel_id
-           WHERE videos_fts MATCH ?
-           ORDER BY rank
-           LIMIT ?""",
-        (fts_query, limit),
-    ).fetchall()
+           JOIN channels c ON c.id = v.channel_id"""
+    if scope == "watched":
+        query_sql += " JOIN video_states vs ON vs.video_id = v.id AND vs.state = 'watched'"
+    query_sql += " WHERE videos_fts MATCH ? ORDER BY rank LIMIT ?"
+
+    rows = conn.execute(query_sql, (fts_query, limit)).fetchall()
 
     items = [
         {

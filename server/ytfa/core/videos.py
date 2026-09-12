@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from sqlite3 import Connection
 
 DEFAULT_FEED_LIMIT = 30
@@ -26,7 +27,7 @@ def _video_categories(conn: Connection, channel_id: str) -> list[str]:
 def _row_to_card(conn: Connection, row) -> dict:
     video_id, title, channel_id, channel_title, channel_thumb = row[0], row[1], row[2], row[3], row[4]
     published_at, duration_sec, kind, thumbnail_url = row[5], row[6], row[7], row[8]
-    summary, verdict_json, state = row[9], row[10], row[11]
+    summary, verdict_json, state, transcript_status = row[9], row[10], row[11], row[12]
     return {
         "id": video_id,
         "title": title,
@@ -40,13 +41,14 @@ def _row_to_card(conn: Connection, row) -> dict:
         "verdict": json.loads(verdict_json) if verdict_json else None,
         "state": state,
         "categories": _video_categories(conn, channel_id),
+        "transcript_status": transcript_status,
     }
 
 
 _CARD_SELECT = """
     SELECT v.id, v.title, v.channel_id, c.title, c.thumbnail_url,
            v.published_at, v.duration_sec, v.kind, v.thumbnail_url,
-           v.summary, v.verdict, COALESCE(vs.state, 'new')
+           v.summary, v.verdict, COALESCE(vs.state, 'new'), v.transcript_status
     FROM videos v
     JOIN channels c ON c.id = v.channel_id
     LEFT JOIN video_states vs ON vs.video_id = v.id
@@ -65,8 +67,14 @@ def list_feed(
     states: list[str] | None = None,
     include_shorts: bool = False,
     limit: int = DEFAULT_FEED_LIMIT,
+    since_hours: int | None = None,
 ) -> dict:
-    """`GET /feed` — VideoCard 목록(docs/03 §2.3)."""
+    """`GET /feed` — VideoCard 목록(docs/03 §2.3).
+
+    `since_hours`는 REST에는 없고 MCP `list_new_videos`(docs §3.1,
+    Phase 5 step 20)가 쓴다 — "새 영상"은 상태뿐 아니라 최근성도 봐야
+    해서 추가했다.
+    """
     states = states or ["new", "seen"]
     placeholders = ",".join("?" for _ in states)
     params: list = list(states)
@@ -77,6 +85,12 @@ def list_feed(
     if category:
         query += " AND v.channel_id IN (SELECT channel_id FROM channel_categories WHERE category_id = ?)"
         params.append(category)
+    if since_hours is not None:
+        # datetime()으로 감싸는 이유는 ranking.py의 같은 패턴 주석 참고 —
+        # 저장 형식과 sqlite 출력 형식이 달라서 안 감싸면 날짜 경계에서
+        # 틀린다(실측 버그).
+        query += " AND datetime(v.published_at) >= datetime('now', ?)"
+        params.append(f"-{since_hours} hours")
     query += " ORDER BY v.published_at DESC LIMIT ?"
     params.append(limit)
 
@@ -84,6 +98,30 @@ def list_feed(
     items = [_row_to_card(conn, r) for r in rows]
 
     return {"items": items, "next_cursor": None, "total": len(items)}
+
+
+def set_video_state(conn: Connection, video_id: str, state: str, watch_seconds: int | None = None) -> dict:
+    """`POST /videos/{id}/state` / MCP `set_video_state`(docs §2.4, §3.2).
+
+    `watched`로 바뀌면 L2 자막 인덱싱 대상이 된다(ADR-7) — 다만 실제
+    인덱싱 워커는 Phase 8에나 생긴다. 지금은 신호만 정직하게 돌려준다
+    (있지도 않은 큐에 넣은 척은 안 하지만, 나중에 Phase 8이 이 신호를
+    보고 그대로 소비하면 되게 필드는 미리 맞춰둔다).
+    """
+    row = conn.execute("SELECT id FROM videos WHERE id = ?", (video_id,)).fetchone()
+    if row is None:
+        return {"ok": False, "error": "NOT_FOUND", "hint": f"video '{video_id}' 없음"}
+
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO video_states (video_id, state, watch_seconds, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(video_id) DO UPDATE SET
+               state = excluded.state, watch_seconds = excluded.watch_seconds, updated_at = excluded.updated_at""",
+        (video_id, state, watch_seconds, now),
+    )
+    conn.commit()
+    return {"ok": True, "queued_for_index": state == "watched"}
 
 
 def feed_counts(conn: Connection, state: str = "new") -> dict:
