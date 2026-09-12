@@ -58,17 +58,34 @@ async function sendMessage(message: string): Promise<void> {
   sendBtn.disabled = true;
 
   appendMessage("user").textContent = message;
-  const assistantEl = appendMessage("assistant");
-  let assistantText = "";
+
+  // 답변 말풍선을 미리 하나 만들어두고 계속 그 안에 이어붙이면, 중간에 낀
+  // 툴 호출 노트가 항상 화면 맨 뒤로 밀린다(실제로 겪은 버그 — 텍스트가
+  // 먼저 다 뜨고 🔧 노트가 끝에 몰려 나왔다). 그래서 말풍선을 그때그때
+  // 새로 만든다 — tool_call이 오면 현재 말풍선을 "닫고", 다음 text부터는
+  // 새 말풍선에 쓴다. DOM 삽입 순서가 곧 이벤트 순서가 되게 하는 게 핵심.
+  let currentAssistantEl: HTMLElement | null = null;
+  let currentText = "";
+
+  function onText(delta: string): void {
+    if (currentAssistantEl === null) {
+      currentAssistantEl = appendMessage("assistant");
+      currentText = "";
+    }
+    currentText += delta;
+    currentAssistantEl.textContent = currentText;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function onToolCall(tool: string): void {
+    appendToolNote(`🔧 ${tool} 호출 중...`);
+    currentAssistantEl = null; // 다음 text는 새 말풍선에 — 시간 순서를 DOM 순서로 유지
+  }
 
   try {
     const threadId = await getThreadId();
     for await (const event of streamChat(message, threadId)) {
-      handleEvent(event, assistantEl, (t) => {
-        assistantText += t;
-        assistantEl.textContent = assistantText;
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-      });
+      handleEvent(event, onText, onToolCall);
     }
   } catch (err) {
     appendToolNote(`오류: ${err instanceof Error ? err.message : String(err)}`);
@@ -78,7 +95,7 @@ async function sendMessage(message: string): Promise<void> {
   }
 }
 
-function handleEvent(event: ChatEvent, _assistantEl: HTMLElement, onText: (delta: string) => void): void {
+function handleEvent(event: ChatEvent, onText: (delta: string) => void, onToolCall: (tool: string) => void): void {
   switch (event.event) {
     case "run_started": {
       const threadId = event.data.thread_id as string | undefined;
@@ -91,7 +108,7 @@ function handleEvent(event: ChatEvent, _assistantEl: HTMLElement, onText: (delta
       break;
     }
     case "tool_call": {
-      appendToolNote(`🔧 ${event.data.tool as string} 호출 중...`);
+      onToolCall(event.data.tool as string);
       break;
     }
     case "tool_result": {
