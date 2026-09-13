@@ -43,6 +43,9 @@ from ytfa.core.search import search_keyword
 from ytfa.core.stats import get_watch_stats as _get_watch_stats
 from ytfa.core.videos import get_video_card, list_feed, set_video_state as _set_video_state
 from ytfa.db import get_connection
+from ytfa.rag.embedder import get_embedder
+from ytfa.rag.hybrid import search_hybrid
+from ytfa.rag.vector_search import search_semantic
 from ytfa.sources.transcript import get_transcript_excerpt as _get_transcript_excerpt
 from ytfa.tool_shapes import parse_since_hours as _parse_since_hours, safe_tool as _safe, to_brief_video as _to_brief
 
@@ -95,26 +98,34 @@ def search_videos(
     video_id: str | None = None,
     limit: int = 10,
 ) -> dict:
-    """제목·설명·요약 전문검색(L0). `mode`/`video_id` 스코프는 아직 일부만 지원한다.
+    """제목·설명·요약·자막(L2 인덱싱된 watched 영상만) 검색.
 
-    현재는 키워드(L0) 검색만 실제로 동작한다 — `mode`에 뭘 넣든 항상
-    keyword로 처리하고, 응답의 `mode` 필드가 실제로 뭘 썼는지 정직하게
-    알려준다(hybrid/semantic은 Phase 8 임베딩이 있어야 함).
-    `scope="video"`(영상 하나 안에서 검색)는 자막 청킹(L2, Phase 8)이
-    있어야 의미가 있어서 아직 NOT_IMPLEMENTED를 돌려준다.
+    `mode`: `keyword`(L0, FTS5) | `semantic`(L1/L2 임베딩 코사인) |
+    `hybrid`(RRF 결합, 기본값). semantic/hybrid 결과는 최고점 청크가
+    L2(자막)면 `start_sec`/`deep_link`가 실제 타임스탬프를 가리킨다
+    (step 36) — L1(요약)뿐이면 `start_sec`은 null, `deep_link`는 그냥
+    영상 링크다. `scope="video"`(영상 하나 안에서 검색)는 아직
+    NOT_IMPLEMENTED다.
     """
     if scope == "video":
-        return {"error": "NOT_IMPLEMENTED", "hint": "scope='video'는 자막 청킹(Phase 8) 이후에 지원 예정"}
+        return {"error": "NOT_IMPLEMENTED", "hint": "scope='video'는 아직 지원 안 함"}
+    if mode not in {"keyword", "semantic", "hybrid"}:
+        return {"error": "INVALID_ARGUMENT", "hint": f"mode='{mode}' 지원 안 함 (keyword|semantic|hybrid)"}
 
     with get_connection() as conn:
-        result = search_keyword(conn, query, limit=limit, scope=scope)
+        if mode == "keyword":
+            result = search_keyword(conn, query, limit=limit, scope=scope)
+        elif mode == "semantic":
+            result = search_semantic(conn, get_embedder(), query, limit=limit, scope=scope)
+        else:
+            result = search_hybrid(conn, get_embedder(), query, limit=limit, scope=scope)
 
     items = [
         {
             **_to_brief({**item["video"], "state": "new", "categories": []}),
             "score": item["score"],
-            "start_sec": None,  # L2(타임스탬프 청킹) 전이라 아직 없음
-            "deep_link": item["video"]["url"],
+            "start_sec": item.get("start_sec"),
+            "deep_link": item.get("deep_link", item["video"]["url"]),
         }
         for item in result["items"]
     ]
