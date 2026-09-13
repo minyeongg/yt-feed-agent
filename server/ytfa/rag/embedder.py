@@ -5,7 +5,17 @@
 이유). `Embedder` 프로토콜 뒤에 숨겨서, "30분 룰"(가이드 step 32 —
 로컬 세팅이 30분 안에 안 잡히면 즉시 API 임베딩으로 갈아탄다)을 지킬
 때 교체 비용을 싸게 만든다.
-"""
+
+**`device="cpu"`를 명시하는 이유(실측 확인, 매우 중요)**: `device`를 안
+정하면 sentence-transformers가 이 Mac에서 MPS(GPU)를 자동으로 골라
+쓴다. 그런데 이 모델(XLM-RoBERTa-large 기반)의 attention 연산이 이
+PyTorch/macOS 조합에서 MPS의 "math" 폴백 경로를 타면서 **텍스트 하나
+임베딩에 30분 넘게 걸리는** 걸 실측으로 확인했다(`Batches: 100%
+[31:15<00:00, 1875.18s/it]`) — 같은 호출을 `device="cpu"`로 강제하면
+로딩 7초, 인코딩 2초로 끝난다. 이게 Phase 8 인덱싱이 예상보다 훨씬
+오래 걸렸던 진짜 원인이었다(장시간 고부하로 컴퓨터가 재부팅되기까지
+했다). MPS가 이 모델에 더 빨라지기 전까지는 CPU가 사실상 유일한
+선택지다."""
 
 from __future__ import annotations
 
@@ -38,7 +48,7 @@ class LocalBGEEmbedder:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name)
+            self._model = SentenceTransformer(self.model_name, device="cpu")
         return self._model
 
     def embed(self, texts: list[str]) -> np.ndarray:

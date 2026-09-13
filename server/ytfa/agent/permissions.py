@@ -5,14 +5,17 @@ ADR-6: LangGraph의 `interrupt()`는 "멈추고 재개하는 방법"만 제공�
 판단해야 하는 부분이다.
 
 docs §3.2: 쓰기·비용 발생 툴(assign_category, set_video_state,
-summarize_videos, remember)은 `ask`. §3.1 읽기 툴은 `auto_allow`.
-지금 그래프에 실제로 붙어있는 쓰기 툴은 두 개뿐이다 — summarize_videos/
-remember는 아직 안 만들었다(Phase 9).
+summarize_videos, remember, forget)은 `ask`. §3.1 읽기 툴(recall 포함)은
+`auto_allow`. remember/forget이 ask인 이유는 비용이 아니라 영향
+범위다 — `remember`로 저장한 선호는 `build_system_prompt`(Phase 9
+step 38)를 거쳐 **앞으로의 모든 대화**에 자동으로 주입된다. 잘못
+저장되면 한 번의 실수가 아니라 계속 반복되는 실수가 된다.
+summarize_videos는 아직 안 만들었다(step 39).
 """
 
 from __future__ import annotations
 
-ASK_TOOLS: frozenset[str] = frozenset({"assign_category", "set_video_state"})
+ASK_TOOLS: frozenset[str] = frozenset({"assign_category", "set_video_state", "remember", "forget"})
 
 
 def requires_approval(tool_name: str) -> bool:
@@ -25,4 +28,11 @@ def summarize_tool_call(tool_name: str, args: dict) -> str:
         return f"채널 '{args.get('channel_id', '?')}'의 카테고리를 {args.get('category_ids', [])}로 재배정합니다"
     if tool_name == "set_video_state":
         return f"영상 '{args.get('video_id', '?')}' 상태를 '{args.get('state', '?')}'로 바꿉니다"
+    if tool_name == "remember":
+        kind = args.get("kind", "?")
+        content = str(args.get("content", "?"))
+        preview = content if len(content) <= 40 else content[:40] + "…"
+        return f"새 기억을 저장합니다({kind}): {preview}"
+    if tool_name == "forget":
+        return f"기억 '{args.get('id', '?')}'을(를) 삭제합니다"
     return f"{tool_name} 실행"

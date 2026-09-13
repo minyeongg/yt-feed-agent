@@ -10,14 +10,15 @@
   NOT_FOUND 같은 예상된 실패는 각 함수가 직접 그 모양으로 반환한다.
 - 목록 툴은 `limit` 상한을 두고 축약형을 반환한다.
 
-읽기 툴 8개 중 6개(list_new_videos, get_video, search_videos,
-get_transcript_excerpt, list_categories, get_watch_stats)는 `auto_allow`
-(가만히 둬도 되는 조회)이고, 쓰기 툴 2개(assign_category,
-set_video_state)는 `ask`(사용자 승인) 대상이다(docs §3.2) — 다만 그
-승인 게이트 자체는 에이전트 레이어(Phase 6 `agent/permissions.py`)의
-책임이라 이 파일은 관여하지 않는다. 15개를 한 번에 다 만들지 않는다
-(`list_channels`/`recall`/`remember`/`get_cost_summary`/
-`summarize_videos`는 Phase 6·9에서 실제로 필요해질 때 추가한다).
+읽기 툴 7개(list_new_videos, get_video, search_videos,
+get_transcript_excerpt, list_categories, get_watch_stats, recall)는
+`auto_allow`(가만히 둬도 되는 조회)이고, 쓰기 툴 4개(assign_category,
+set_video_state, remember, forget)는 `ask`(사용자 승인) 대상이다
+(docs §3.2) — 다만 그 승인 게이트 자체는 에이전트 레이어(Phase 6
+`agent/permissions.py`)의 책임이라 이 파일은 관여하지 않는다. 15개를
+한 번에 다 만들지 않는다(`list_channels`/`get_cost_summary`/
+`summarize_videos`는 실제로 필요해질 때 추가한다 — remember/recall/
+forget은 Phase 9 step 38에서 추가함).
 
 **`mcp<2.0.0`로 고정한 이유**: `mcp` SDK 2.x는 `FastMCP`를 `MCPServer`로
 개명하는 등 API가 바뀌었고, 이 파일은 원래 2.x로 만들어져 있었다. 하지만
@@ -39,6 +40,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from ytfa.core.categories import assign_category_to_channel, list_categories as _list_categories
+from ytfa.core.memory import forget as _forget, recall as _recall, remember as _remember
 from ytfa.core.search import search_keyword
 from ytfa.core.stats import get_watch_stats as _get_watch_stats
 from ytfa.core.videos import get_video_card, list_feed, set_video_state as _set_video_state
@@ -179,6 +181,34 @@ def set_video_state(video_id: str, state: str, watch_seconds: int | None = None)
     """영상 시청 상태를 바꾼다. `watched`면 L2 인덱싱 대상으로 표시된다(Phase 8)."""
     with get_connection() as conn:
         return _set_video_state(conn, video_id, state, watch_seconds=watch_seconds)
+
+
+@mcp.tool()
+@_safe
+def remember(kind: str, content: str, source: str | None = None) -> dict:
+    """기억을 저장한다. `kind='preference'`는 다음 대화부터 시스템
+    프롬프트에 자동으로 실린다("요약은 짧게" 같은 지속적인 지시에 쓴다).
+    `kind='fact'`는 자동 주입 안 되고 `recall`로 찾아볼 때만 쓰인다.
+    `content`는 300자 이하로 짧게."""
+    with get_connection() as conn:
+        return _remember(conn, kind, content, source=source)
+
+
+@mcp.tool()
+@_safe
+def forget(id: str) -> dict:
+    """저장된 기억 하나를 지운다."""
+    with get_connection() as conn:
+        return _forget(conn, id)
+
+
+@mcp.tool()
+@_safe
+def recall(kind: str = "all", query: str | None = None, limit: int = 20) -> dict:
+    """저장된 기억을 찾는다. `kind`: `all`(기본)|`preference`|`fact`.
+    `query`가 있으면 내용 부분일치로 거른다."""
+    with get_connection() as conn:
+        return _recall(conn, kind=kind, query=query, limit=limit)
 
 
 def main() -> None:

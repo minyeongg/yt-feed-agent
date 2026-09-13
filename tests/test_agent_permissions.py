@@ -8,10 +8,12 @@ from ytfa.agent.permissions import requires_approval, summarize_tool_call
 def test_write_tools_require_approval():
     assert requires_approval("assign_category") is True
     assert requires_approval("set_video_state") is True
+    assert requires_approval("remember") is True
+    assert requires_approval("forget") is True
 
 
 def test_read_tools_do_not_require_approval():
-    for name in ["list_new_videos", "search_videos", "get_video", "list_categories", "get_watch_stats"]:
+    for name in ["list_new_videos", "search_videos", "get_video", "list_categories", "get_watch_stats", "recall"]:
         assert requires_approval(name) is False
 
 
@@ -29,3 +31,14 @@ def test_summarize_tool_call_set_video_state():
 
 def test_summarize_tool_call_unknown_tool_has_fallback():
     assert summarize_tool_call("mystery_tool", {}) == "mystery_tool 실행"
+
+
+def test_summarize_tool_call_remember():
+    summary = summarize_tool_call("remember", {"kind": "preference", "content": "요약은 짧게"})
+    assert "preference" in summary
+    assert "요약은 짧게" in summary
+
+
+def test_summarize_tool_call_forget():
+    summary = summarize_tool_call("forget", {"id": "mem_abc123"})
+    assert "mem_abc123" in summary

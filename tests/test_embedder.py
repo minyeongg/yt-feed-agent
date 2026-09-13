@@ -74,3 +74,22 @@ def test_embed_output_vectors_are_l2_normalized():
 
     for v in vectors:
         assert abs(float(np.linalg.norm(v)) - 1.0) < 1e-5
+
+
+def test_load_forces_cpu_device(monkeypatch):
+    """MPS 자동 선택 시 이 모델(XLM-R-large 기반) 텍스트 하나 임베딩에
+    30분 넘게 걸리는 걸 실측으로 확인했다(Phase 8 인덱싱이 컴퓨터를
+    재부팅시킨 원인) — `_load()`가 `device="cpu"`를 명시적으로 넘기는지
+    확인한다."""
+    captured = {}
+
+    class _FakeST:
+        def __init__(self, model_name, device=None):
+            captured["model_name"] = model_name
+            captured["device"] = device
+
+    monkeypatch.setattr("sentence_transformers.SentenceTransformer", _FakeST)
+
+    LocalBGEEmbedder()._load()
+
+    assert captured["device"] == "cpu"

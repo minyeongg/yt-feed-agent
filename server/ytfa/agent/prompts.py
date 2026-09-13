@@ -17,9 +17,21 @@ server.py)가 이제 `deep_link`/`start_sec`을 실제로 반환하니(step 33/3
 소용없다. 이건 시스템 프롬프트 문구로만 강제하는 것이라 실제 대화로
 지켜지는지는 자동화된 테스트로 못 잡는다(LLM 호출이 필요해서 비용도
 든다) — 라이브 대화로 사람이 확인하는 영역이다.
+
+`build_system_prompt`(Phase 9 step 38)는 `core/memory.py`의
+`active_preferences_text`를 이 상수 뒤에 이어 붙인다 — "장기 기억은
+시스템 프롬프트 주입"(가이드 원문)이 정확히 이 함수다. `agent/nodes.py`가
+매 턴마다(체크포인트 재개 포함) 이 함수를 다시 불러서, `remember`로
+새 선호가 추가되면 굳이 스레드를 새로 시작 안 해도 다음 턴부터 바로
+반영된다. 에피소딕 기억(`kind='fact'`)은 여기 안 섞고 `recall` 툴로만
+조회한다 — 매 턴 프롬프트에 다 끼워 넣으면 컨텍스트가 무한정 불어난다.
 """
 
 from __future__ import annotations
+
+from sqlite3 import Connection
+
+from ytfa.core.memory import active_preferences_text
 
 SYSTEM_PROMPT = """당신은 개인 유튜브 구독 피드 관리 도우미다. 사용자의 구독
 채널에서 새 영상을 찾고, 검색하고, 영상 상세를 알려주는 툴을 쓸 수 있다.
@@ -36,3 +48,10 @@ SYSTEM_PROMPT = """당신은 개인 유튜브 구독 피드 관리 도우미다.
 구간을 근거로 삼은 경우) 그 타임스탬프가 포함된 링크를 그대로 쓴다 —
 `youtu.be/xxx?t=123` 형태 링크는 그 지점부터 재생되므로 요약해서 다시
 쓰지 않는다."""
+
+
+def build_system_prompt(conn: Connection) -> str:
+    """`SYSTEM_PROMPT` + 저장된 선호(`kind='preference'`) 목록. DB를 매번
+    다시 읽어서, 대화 중간에 `remember`로 선호가 추가돼도 바로 다음
+    턴부터 반영된다."""
+    return SYSTEM_PROMPT + active_preferences_text(conn)

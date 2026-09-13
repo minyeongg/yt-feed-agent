@@ -29,8 +29,9 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from ytfa.agent.permissions import requires_approval, summarize_tool_call
-from ytfa.agent.prompts import SYSTEM_PROMPT
+from ytfa.agent.prompts import build_system_prompt
 from ytfa.agent.state import AgentState
+from ytfa.db import get_connection
 from ytfa.security import sanitize_tool_message_content
 
 COMPACT_KEEP_RECENT = 3
@@ -39,10 +40,14 @@ COMPACT_MARKER = "[이전 툴 결과 압축됨"
 
 
 def make_agent_node(model_with_tools) -> Callable[[AgentState], dict]:
-    """모델 호출 노드를 만든다. 시스템 프롬프트는 상태엔 안 남기고 호출 때만 앞에 붙인다."""
+    """모델 호출 노드를 만든다. 시스템 프롬프트는 상태엔 안 남기고 호출 때만
+    앞에 붙인다 — 그리고 매 턴 새로 만든다(step 38: `remember`로 선호가
+    막 추가됐어도 다음 턴에 바로 반영되게)."""
 
     def agent_node(state: AgentState) -> dict:
-        messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
+        with get_connection() as conn:
+            system_prompt = build_system_prompt(conn)
+        messages = [SystemMessage(content=system_prompt), *state["messages"]]
         response = model_with_tools.invoke(messages)
         return {"messages": [response]}
 
