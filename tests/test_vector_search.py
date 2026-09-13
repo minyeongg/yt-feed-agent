@@ -1,36 +1,22 @@
-"""rag/vector_search.py 단위 테스트 (docs/05-구현가이드.md Phase 8, step 33 확인).
+"""rag/vector_search.py 단위 테스트 (docs/05-구현가이드.md Phase 8, step 33/36 확인).
 
 `tests/test_indexer.py`와 같은 결정적 가짜 임베더(단어 겹침 기반)로
-"의미가 겹치는 영상이 위로 온다", "watched scope가 필터링된다"를 확인한다.
+"의미가 겹치는 영상이 위로 온다", "watched scope가 필터링된다",
+"L2 자막 청크가 최고점이면 타임스탬프 딥링크가 나온다"를 확인한다.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
-import numpy as np
 import pytest
 
+from tests.fakes import FakeEmbedder
 from ytfa.db import init_db
-from ytfa.rag.indexer import index_l1
+from ytfa.rag.indexer import index_l1, index_l2
 from ytfa.rag.vector_search import search_semantic
-
-DIM = 16
-
-
-class FakeEmbedder:
-    """단어 겹침을 L2 정규화된 벡터로 흉내 내는 결정적 가짜(테스트 전용)."""
-
-    def embed(self, texts: list[str]) -> np.ndarray:
-        vectors = []
-        for text in texts:
-            v = np.zeros(DIM, dtype=np.float32)
-            for word in text.split():
-                v[hash(word) % DIM] += 1.0
-            norm = np.linalg.norm(v)
-            vectors.append(v / norm if norm > 0 else v)
-        return np.array(vectors, dtype=np.float32)
 
 
 @pytest.fixture
@@ -62,6 +48,45 @@ def test_search_semantic_ranks_matching_video_first(conn):
     assert result["mode"] == "semantic"
     assert result["items"][0]["video"]["id"] == "v_rust"
     assert result["items"][0]["matched_by"] == "semantic"
+
+
+def test_search_semantic_l1_only_chunk_has_no_start_sec(conn):
+    """L1(요약) 청크는 start_sec이 없다 — 딥링크가 그냥 영상 링크여야 한다."""
+    result = search_semantic(conn, FakeEmbedder(), "러스트 비동기 futures", limit=5)
+
+    item = result["items"][0]
+    assert item["start_sec"] is None
+    assert item["deep_link"] == "https://youtu.be/v_rust"
+
+
+def test_search_semantic_l2_chunk_surfaces_timestamp_deep_link(conn):
+    """L2(자막) 청크가 최고점으로 매치되면 start_sec이 실려서
+    `youtu.be/xxx?t=..` 형태의 딥링크가 나와야 한다(step 36 확인 기준)."""
+    now = datetime.now(timezone.utc).isoformat()
+    # 첫 세그먼트를 충분히 길게(기본 target_tokens=500 이상) 채워서 그
+    # 자체로 청크 하나를 다 채우게 한다 — 그래야 두 번째 세그먼트가 별도
+    # 청크로 갈라져서 start_sec=90을 그대로 갖는다.
+    filler = "필러단어" * 600  # 약 600 토큰(len//4) 분량
+    segments = [
+        {"start": 0.0, "dur": 80.0, "text": filler},
+        {"start": 90.0, "dur": 5.0, "text": "러스트 비동기 futures waker 핵심 설명"},
+    ]
+    conn.execute(
+        "INSERT INTO video_states (video_id, state, updated_at) VALUES ('v_rust', 'watched', ?)", (now,)
+    )
+    conn.execute(
+        "INSERT INTO transcripts (video_id, lang, is_auto, segments, fetched_at) VALUES ('v_rust', 'ko', 1, ?, ?)",
+        (json.dumps(segments), now),
+    )
+    conn.commit()
+    index_l2(conn, FakeEmbedder())
+
+    result = search_semantic(conn, FakeEmbedder(), "러스트 비동기 futures waker", limit=5)
+
+    item = result["items"][0]
+    assert item["video"]["id"] == "v_rust"
+    assert item["start_sec"] == 90
+    assert item["deep_link"] == "https://youtu.be/v_rust?t=90"
 
 
 def test_search_semantic_no_embeddings_returns_hint():

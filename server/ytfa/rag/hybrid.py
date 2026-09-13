@@ -54,11 +54,18 @@ def search_hybrid(
         kw_item = kw_by_id.get(vid)
         sem_item = sem_by_id.get(vid)
         matched_by = "hybrid" if kw_item and sem_item else ("keyword" if kw_item else "semantic")
+        base = kw_item or sem_item
         items.append(
             {
-                "video": (kw_item or sem_item)["video"],
+                "video": base["video"],
                 "score": round(score, 5),
                 "matched_by": matched_by,
+                # excerpt/start_sec/deep_link는 semantic 쪽 청크에서만 나온다
+                # (L2 자막 청크가 타임스탬프를 갖는 유일한 경로) — 키워드만
+                # 걸린 영상은 일반 링크로 대체한다.
+                "excerpt": sem_item["excerpt"] if sem_item else None,
+                "start_sec": sem_item["start_sec"] if sem_item else None,
+                "deep_link": sem_item["deep_link"] if sem_item else f"https://youtu.be/{vid}",
             }
         )
 

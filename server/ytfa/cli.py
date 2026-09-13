@@ -14,7 +14,7 @@ from ytfa.core.ranking import DEFAULT_BRIEFING_LIMIT, DEFAULT_CANDIDATE_LIMIT, D
 from ytfa.db import get_connection
 from ytfa.llm.cost import LLMClient, cost_summary
 from ytfa.rag.embedder import get_embedder
-from ytfa.rag.indexer import index_l1
+from ytfa.rag.indexer import index_l1, index_l2
 
 app = typer.Typer(add_completion=False)
 console = Console()
@@ -99,6 +99,24 @@ def index(batch_size: int = 64, limit: int | None = None) -> None:
     with get_connection() as conn:
         result = index_l1(conn, get_embedder(), batch_size=batch_size, on_batch=on_batch, limit=limit)
     console.print(f"[bold]{result['indexed']}건[/bold] 인덱싱 완료 (요약 임베딩 L1) — 남은 대기: {result['remaining']}건")
+
+
+@app.command()
+def index_transcripts(batch_size: int = 64, limit: int | None = None) -> None:
+    """자막 청킹 L2 인덱싱 (Phase 8 step 36 확인용).
+
+    `watched` 표시되고 자막이 있는 영상만 대상 — 안 본 영상까지 자막을
+    전부 청킹하는 건 낭비다(ADR-7). 500토큰/50오버랩으로 나눠
+    `start_sec`을 저장한다 — `GET /search?mode=semantic`에서
+    `youtu.be/xxx?t=743` 형태의 타임스탬프 딥링크로 나온다.
+    """
+
+    def on_batch(done: int, total: int) -> None:
+        console.print(f"  {done}/{total}")
+
+    with get_connection() as conn:
+        result = index_l2(conn, get_embedder(), batch_size=batch_size, on_batch=on_batch, limit=limit)
+    console.print(f"[bold]{result['indexed']}건[/bold] 인덱싱 완료 (자막 청킹 L2) — 남은 대기: {result['remaining']}건")
 
 
 def main() -> None:

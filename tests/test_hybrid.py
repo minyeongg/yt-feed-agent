@@ -10,28 +10,12 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-import numpy as np
 import pytest
 
+from tests.fakes import FakeEmbedder
 from ytfa.db import init_db
 from ytfa.rag.hybrid import rrf_fuse, search_hybrid
 from ytfa.rag.indexer import index_l1
-
-DIM = 16
-
-
-class FakeEmbedder:
-    """단어 겹침을 L2 정규화된 벡터로 흉내 내는 결정적 가짜(테스트 전용)."""
-
-    def embed(self, texts: list[str]) -> np.ndarray:
-        vectors = []
-        for text in texts:
-            v = np.zeros(DIM, dtype=np.float32)
-            for word in text.split():
-                v[hash(word) % DIM] += 1.0
-            norm = np.linalg.norm(v)
-            vectors.append(v / norm if norm > 0 else v)
-        return np.array(vectors, dtype=np.float32)
 
 
 def test_rrf_fuse_ranks_items_in_both_lists_higher():
