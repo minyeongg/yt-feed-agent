@@ -20,6 +20,9 @@ from pydantic import BaseModel
 
 from ytfa.core.search import search_keyword
 from ytfa.db import get_connection
+from ytfa.rag.embedder import get_embedder
+from ytfa.rag.hybrid import search_hybrid
+from ytfa.rag.vector_search import search_semantic
 
 GOLDEN_SET_PATH = Path(__file__).parent / "golden_set.json"
 
@@ -103,18 +106,61 @@ def make_l0_search_fn() -> Callable[[str, int], list[str]]:
     return search_fn
 
 
-def main() -> None:
-    golden_set = load_golden_set()
-    report = evaluate_retrieval(golden_set, make_l0_search_fn(), k=5, level="L0", mode="keyword")
+def make_l1_search_fn() -> Callable[[str, int], list[str]]:
+    """`rag/vector_search.py`(요약 임베딩)를 같은 모양으로 감싼다.
 
-    print(f"L0(FTS5) 기준선 — 골든셋 {len(golden_set)}건, k={report.k}")
-    print(f"  recall@{report.k}: {report.recall_at_k:.3f}")
-    print(f"  MRR:       {report.mrr:.3f}")
-    print()
-    print("질의별 결과:")
+    임베더는 모듈 싱글턴(`get_embedder`)이라 질의마다 모델을 다시 로드하지
+    않는다.
+    """
+    embedder = get_embedder()
+
+    def search_fn(query: str, k: int) -> list[str]:
+        with get_connection() as conn:
+            result = search_semantic(conn, embedder, query, limit=k)
+        return [item["video"]["id"] for item in result["items"]]
+
+    return search_fn
+
+
+def make_hybrid_search_fn() -> Callable[[str, int], list[str]]:
+    """`rag/hybrid.py`(RRF 결합)를 같은 모양으로 감싼다."""
+    embedder = get_embedder()
+
+    def search_fn(query: str, k: int) -> list[str]:
+        with get_connection() as conn:
+            result = search_hybrid(conn, embedder, query, limit=k)
+        return [item["video"]["id"] for item in result["items"]]
+
+    return search_fn
+
+
+def _print_report(report: RetrievalReport, label: str) -> None:
+    print(f"{label} — recall@{report.k}: {report.recall_at_k:.3f}  MRR: {report.mrr:.3f}")
     for pq in report.per_query:
         mark = "O" if pq["hit"] else "X"
         print(f"  [{mark}] {pq['id']}: {pq['query'][:40]} (rank={pq['rank']})")
+
+
+def main() -> None:
+    golden_set = load_golden_set()
+
+    l0 = evaluate_retrieval(golden_set, make_l0_search_fn(), k=5, level="L0", mode="keyword")
+    print(f"골든셋 {len(golden_set)}건, k=5\n")
+    _print_report(l0, "L0(FTS5 키워드)")
+
+    print()
+    l1 = evaluate_retrieval(golden_set, make_l1_search_fn(), k=5, level="L1", mode="semantic")
+    _print_report(l1, "L1(요약 임베딩, semantic)")
+
+    print()
+    hybrid = evaluate_retrieval(golden_set, make_hybrid_search_fn(), k=5, level="L1", mode="hybrid")
+    _print_report(hybrid, "하이브리드(RRF, L0+L1)")
+
+    print()
+    print(
+        f"L1 vs L0:     recall@5 {l1.recall_at_k - l0.recall_at_k:+.3f}, MRR {l1.mrr - l0.mrr:+.3f}\n"
+        f"hybrid vs L0: recall@5 {hybrid.recall_at_k - l0.recall_at_k:+.3f}, MRR {hybrid.mrr - l0.mrr:+.3f}"
+    )
 
 
 if __name__ == "__main__":

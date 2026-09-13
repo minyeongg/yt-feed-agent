@@ -13,6 +13,8 @@ from rich.table import Table
 from ytfa.core.ranking import DEFAULT_BRIEFING_LIMIT, DEFAULT_CANDIDATE_LIMIT, DEFAULT_SINCE_HOURS, build_briefing
 from ytfa.db import get_connection
 from ytfa.llm.cost import LLMClient, cost_summary
+from ytfa.rag.embedder import get_embedder
+from ytfa.rag.indexer import index_l1
 
 app = typer.Typer(add_completion=False)
 console = Console()
@@ -76,6 +78,27 @@ def brief(
         console.print(f"   [dim]이유: {', '.join(pick['reasons'])} (score={pick['score']})[/dim]\n")
 
     console.print(f"[dim]이번 요약 비용: ${result['summarize']['cost_usd']:.6f}[/dim]")
+
+
+@app.command()
+def index(batch_size: int = 64, limit: int | None = None) -> None:
+    """요약 임베딩 L1 인덱싱 (Phase 8 step 33 확인용).
+
+    `indexed_level < 1`인 영상 전체가 대상(요약 없으면 설명으로 대체) —
+    이미 인덱싱된 영상은 건드리지 않는다. 배치마다 커밋하고 진행률을
+    찍는다 — 대량 백필(수천 건) 중간에 멈춰도 이미 처리한 만큼은 남는다.
+
+    `--limit`으로 이번 실행에서 처리할 최대 건수를 제한할 수 있다 —
+    GPU 없이 몇 시간씩 계속 돌리다 컴퓨터가 재부팅된 적이 있어서, 여러
+    번에 걸쳐 짧게 나눠 돌릴 때 쓴다(예: `xba index --limit 300`).
+    """
+
+    def on_batch(done: int, total: int) -> None:
+        console.print(f"  {done}/{total}")
+
+    with get_connection() as conn:
+        result = index_l1(conn, get_embedder(), batch_size=batch_size, on_batch=on_batch, limit=limit)
+    console.print(f"[bold]{result['indexed']}건[/bold] 인덱싱 완료 (요약 임베딩 L1) — 남은 대기: {result['remaining']}건")
 
 
 def main() -> None:

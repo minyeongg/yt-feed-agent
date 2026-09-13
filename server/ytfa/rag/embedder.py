@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Protocol
 
 import numpy as np
@@ -51,3 +52,10 @@ class LocalBGEEmbedder:
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     """L2 정규화된 벡터끼리는 내적이 곧 코사인 유사도다."""
     return float(np.dot(a, b))
+
+
+@lru_cache(maxsize=1)
+def get_embedder(model_name: str = "BAAI/bge-m3") -> LocalBGEEmbedder:
+    """요청마다 새로 만들면 모델을 매번 다시 로드하게 된다(수 초~수십 초) —
+    API 서버·인덱싱 CLI가 공유해서 쓸 프로세스 전역 싱글턴."""
+    return LocalBGEEmbedder(model_name)
