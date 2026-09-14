@@ -46,17 +46,25 @@ export function extractVideoId(card: Element): string | null {
  * 고정 + `overflow:hidden`이라 대부분 카드에서 배지가 잘려서 안
  * 보였다(실측 — 제목이 짧아 여유 있던 카드 하나만 보임). 그래서 높이가
  * 콘텐츠에 맞춰 늘어나는 카드 최상위(`yt-lockup-view-model`)의 자식으로
- * 붙이도록 바꿨다.
+ * 붙이도록 바꿨는데, 그 수정 이후에도 실측에서 배지가 안 보였다.
  *
- * KNOWN ISSUE: 이 수정 이후에도 실측에서 배지가 안 보였다(원인 미확정 —
- * `yt-lockup-view-model`이 `display:contents`라 배지가 조부모 레이아웃
- * 컨텍스트로 새는 경우가 의심되지만 라이브 DOM 재확인이 필요하다).
- * 데이터 연결은 정상이다(video/summary 매칭까지는 로그로 확인됨) — 순수
- * 시각적 문제라 기능적으로 막힌 건 아니다. 다음에 손볼 때는 먼저
- * `getComputedStyle(document.querySelector('.ytfa-badge'))`로 실제
- * display/height를 확인하는 데서 시작할 것. */
+ * 의심되는 원인: `yt-lockup-view-model`이 `display:contents`면 그
+ * 자체가 박스를 안 만들어서, 거기 붙인 자식(배지)이 실제로는
+ * "조부모의 자식"인 것처럼 레이아웃된다 — 우리가 기대한 위치가 아니라
+ * 조부모의 flex/grid 규칙에 휘둘리는 엉뚱한 자리에 놓이거나 가려진다.
+ * 라이브 DOM을 직접 못 띄우는 환경이라 이 셀렉터 하나를 확정하는 대신,
+ * `display:contents`인 조상을 만나면 실제 박스를 가진 조상이 나올 때까지
+ * 거슬러 올라가는 런타임 방어로 바꿨다 — 문제의 정확한 계층을 몰라도
+ * 되고, 유튜브가 마크업을 또 바꿔도 같은 종류의 문제엔 자동으로
+ * 버틴다. 그래도 안 보이면 `getComputedStyle(document.querySelector('.ytfa-badge'))`로
+ * 실제 display/height부터 확인할 것 — 이번에도 추측성 수정이라 라이브
+ * 확인 전까진 "고쳤다"고 단정하지 않는다. */
 export function findCardAppendTarget(card: Element): Element {
-  return card.querySelector("yt-lockup-view-model") ?? card;
+  let target: Element = card.querySelector("yt-lockup-view-model") ?? card;
+  while (target !== card && getComputedStyle(target).display === "contents") {
+    target = target.parentElement ?? card;
+  }
+  return target;
 }
 
 /** 이미 주입된 요소인지 표시하는 데이터 속성 — 재주입 시 중복 방지. */
