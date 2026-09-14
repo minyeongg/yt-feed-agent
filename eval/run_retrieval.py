@@ -20,8 +20,10 @@ from pydantic import BaseModel
 
 from ytfa.core.search import search_keyword
 from ytfa.db import get_connection
+from ytfa.llm.cost import LLMClient
 from ytfa.rag.embedder import get_embedder
 from ytfa.rag.hybrid import search_hybrid
+from ytfa.rag.rerank import rerank as rerank_candidates
 from ytfa.rag.vector_search import search_semantic
 
 GOLDEN_SET_PATH = Path(__file__).parent / "golden_set.json"
@@ -134,6 +136,21 @@ def make_hybrid_search_fn() -> Callable[[str, int], list[str]]:
     return search_fn
 
 
+def make_hybrid_reranked_search_fn(pool: int = 30) -> Callable[[str, int], list[str]]:
+    """`rag/hybrid.py`로 후보 `pool`건을 뽑고 `rag/rerank.py`(소형 모델 1회
+    호출)로 재정렬한다. 실제 LLM을 호출한다 — 비용은 `xba cost`로 별도 확인."""
+    embedder = get_embedder()
+    client = LLMClient()
+
+    def search_fn(query: str, k: int) -> list[str]:
+        with get_connection() as conn:
+            hybrid_result = search_hybrid(conn, embedder, query, limit=pool)
+            reranked = rerank_candidates(client, conn, query, hybrid_result["items"], top_k=k)
+        return [item["video"]["id"] for item in reranked]
+
+    return search_fn
+
+
 def _print_report(report: RetrievalReport, label: str) -> None:
     print(f"{label} — recall@{report.k}: {report.recall_at_k:.3f}  MRR: {report.mrr:.3f}")
     for pq in report.per_query:
@@ -157,9 +174,18 @@ def main() -> None:
     _print_report(hybrid, "하이브리드(RRF, L0+L1)")
 
     print()
+    reranked = evaluate_retrieval(
+        golden_set, make_hybrid_reranked_search_fn(), k=5, level="L1", mode="hybrid", rerank=True
+    )
+    _print_report(reranked, "리랭킹(하이브리드+소형모델 1회 호출)")
+
+    print()
     print(
-        f"L1 vs L0:     recall@5 {l1.recall_at_k - l0.recall_at_k:+.3f}, MRR {l1.mrr - l0.mrr:+.3f}\n"
-        f"hybrid vs L0: recall@5 {hybrid.recall_at_k - l0.recall_at_k:+.3f}, MRR {hybrid.mrr - l0.mrr:+.3f}"
+        f"L1 vs L0:      recall@5 {l1.recall_at_k - l0.recall_at_k:+.3f}, MRR {l1.mrr - l0.mrr:+.3f}\n"
+        f"hybrid vs L0:  recall@5 {hybrid.recall_at_k - l0.recall_at_k:+.3f}, MRR {hybrid.mrr - l0.mrr:+.3f}\n"
+        f"rerank vs L0:  recall@5 {reranked.recall_at_k - l0.recall_at_k:+.3f}, MRR {reranked.mrr - l0.mrr:+.3f}\n"
+        f"rerank vs hybrid: recall@5 {reranked.recall_at_k - hybrid.recall_at_k:+.3f}, "
+        f"MRR {reranked.mrr - hybrid.mrr:+.3f}"
     )
 
 
