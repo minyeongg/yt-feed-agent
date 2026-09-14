@@ -18,6 +18,17 @@
 문자열로 치환한다. 최근 `COMPACT_KEEP_RECENT`건과 사용자 메시지는
 그대로 둔다. LLM을 안 쓴다 — 전문을 잘라서 "이만큼 압축했다"는 표시만
 남기는 구조적 압축이다(비용 0, ADR-8과 같은 절약 원칙).
+
+**프롬프트 캐싱(Phase 9 step 40)**: `agent_node`가 시스템 프롬프트를
+`cache_control: {"type": "ephemeral"}`가 붙은 콘텐츠 블록으로 감싼다.
+Anthropic 캐싱은 프리픽스 매치라(tools → system → messages 순으로
+렌더링됨), 시스템 프롬프트 블록에 브레이크포인트를 찍으면 그 앞의
+tools 정의까지 통째로 캐시된다 — 매 턴 다시 보내는 고정 비용(도구
+정의+시스템 프롬프트)이 캐시 히트로 싸진다. 대화가 길어질수록(툴 정의가
+꽤 크다) 절감이 커진다. `build_system_prompt`가 매 턴 DB를 다시
+읽어서(step 38, `remember`가 다음 턴에 바로 반영되게) 문자열이 바뀌면
+캐시가 자연히 무효화되는데 — 이건 버그가 아니라 정확한 동작이다(내용이
+바뀌었으니 다시 캐싱해야 맞다).
 """
 
 from __future__ import annotations
@@ -47,7 +58,14 @@ def make_agent_node(model_with_tools) -> Callable[[AgentState], dict]:
     def agent_node(state: AgentState) -> dict:
         with get_connection() as conn:
             system_prompt = build_system_prompt(conn)
-        messages = [SystemMessage(content=system_prompt), *state["messages"]]
+        # 콘텐츠를 문자열이 아니라 블록 리스트로 감싸야 langchain-anthropic이
+        # cache_control을 실제 요청에 실어 보낸다(문자열 content엔 붙일 자리가
+        # 없다). 이 블록이 tools 다음, messages 앞의 마지막 안정 블록이라
+        # 여기 찍은 브레이크포인트가 tools+system 프리픽스 전체를 캐싱한다.
+        system_message = SystemMessage(
+            content=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+        )
+        messages = [system_message, *state["messages"]]
         response = model_with_tools.invoke(messages)
         return {"messages": [response]}
 

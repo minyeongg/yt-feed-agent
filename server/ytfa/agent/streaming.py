@@ -242,9 +242,19 @@ async def stream_chat(graph: Any, thread_id: str, message: str, conn: Any | None
                         model_name = resp_meta.get("model_name") or ""
                         input_tokens = usage.get("input_tokens", 0) or 0
                         output_tokens = usage.get("output_tokens", 0) or 0
-                        cache_read = (usage.get("input_token_details") or {}).get("cache_read", 0) or 0
+                        input_token_details = usage.get("input_token_details") or {}
+                        cache_read = input_token_details.get("cache_read", 0) or 0
+                        cache_creation = input_token_details.get("cache_creation", 0) or 0
+                        # LangChain의 input_tokens는 캐시 히트/기록분을 포함한
+                        # 총합이다(원본 Anthropic SDK와 반대 관례) — compute_cost_usd는
+                        # "신규분만"을 기대하므로 여기서 미리 빼야 한다. 안 그러면
+                        # 캐시 히트 토큰이 전액+10% 할인가로 이중 청구된다(실측으로
+                        # 발견한 버그, step 40).
+                        fresh_input_tokens = max(input_tokens - cache_read - cache_creation, 0)
                         try:
-                            call_cost = compute_cost_usd(model_name, input_tokens, output_tokens, cache_read)
+                            call_cost = compute_cost_usd(
+                                model_name, fresh_input_tokens, output_tokens, cache_read, cache_creation
+                            )
                         except KeyError:
                             call_cost = 0.0  # 단가표에 없는 모델 — 트레이스엔 남기되 조용히 0원 처리
                         acc.input_tokens += input_tokens

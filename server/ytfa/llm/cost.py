@@ -31,22 +31,37 @@ PRICING_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-sonnet-5": (2.00, 10.00),
 }
 
-# 캐시 히트 토큰의 단가 비율(입력가 대비). Anthropic 공식 근사치.
+# 캐시 히트 토큰의 단가 비율(입력가 대비)과 캐시 기록(쓰기) 토큰의 할증
+# 비율. Anthropic 공식 근사치.
 CACHE_READ_DISCOUNT = 0.1
+CACHE_WRITE_PREMIUM = 1.25
 
-
+# `input_tokens`는 원본 Anthropic SDK의 관례를 따른다 — **캐시 히트/기록
+# 토큰을 포함하지 않은, 순수 신규 처리분**이다(`LLMClient.call/parse`가
+# `response.usage.input_tokens`를 그대로 넘기는 게 바로 이 값). LangChain의
+# `usage_metadata.input_tokens`는 반대로 **캐시 포함 총합**이라(실측
+# 확인 — cache_control을 켠 뒤 `input_tokens`가 그대로인데 `cache_read`만
+# 잡히는 걸 보고 발견한 버그), 이 함수를 호출하는 쪽(`agent/streaming.py`)이
+# 캐시 히트/기록분을 미리 빼고 신규분만 넘겨야 한다 — 안 그러면 캐시
+# 히트 토큰이 전액(여기서 input_tokens로)과 10% 할인가(cache_read_tokens
+# 인자로) 이중으로 청구된다(step 40 실측 중 발견한 진짜 버그, 비용 상한
+# 판단에 쓰이는 숫자라 심각했다).
 def compute_cost_usd(
     model: str,
     input_tokens: int,
     output_tokens: int,
     cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
 ) -> float:
-    """토큰 사용량을 달러로 환산한다. 단가표에 없는 모델이면 KeyError."""
+    """토큰 사용량을 달러로 환산한다. 단가표에 없는 모델이면 KeyError.
+
+    `input_tokens`는 캐시 히트/기록을 **제외한** 신규 처리분이어야 한다."""
     if model not in PRICING_PER_MTOK:
         raise KeyError(f"'{model}' 단가가 PRICING_PER_MTOK에 없음 — 표부터 채우고 호출할 것")
     input_price, output_price = PRICING_PER_MTOK[model]
     cost = (input_tokens * input_price + output_tokens * output_price) / 1_000_000
     cost += (cache_read_tokens * input_price * CACHE_READ_DISCOUNT) / 1_000_000
+    cost += (cache_creation_tokens * input_price * CACHE_WRITE_PREMIUM) / 1_000_000
     return cost
 
 
