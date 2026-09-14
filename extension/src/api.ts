@@ -87,7 +87,14 @@ export interface SearchItem {
   };
   score: number;
   matched_by: string;
+  // semantic/hybrid에서만 온다(Phase 8) — L2(자막) 청크가 최고점이면
+  // start_sec이 실제 타임스탬프를 가리킨다. keyword 단독이면 전부 null.
+  excerpt?: string | null;
+  start_sec?: number | null;
+  deep_link?: string;
 }
+
+export type SearchMode = "keyword" | "semantic" | "hybrid";
 
 export interface SearchResponse {
   mode: string;
@@ -204,8 +211,8 @@ export function getFeed(
   return request<FeedResponse>(`/feed?${qs.toString()}`);
 }
 
-export function searchVideos(query: string, limit = 10): Promise<SearchResponse> {
-  const qs = new URLSearchParams({ q: query, mode: "keyword", limit: String(limit) });
+export function searchVideos(query: string, limit = 10, mode: SearchMode = "hybrid"): Promise<SearchResponse> {
+  const qs = new URLSearchParams({ q: query, mode, limit: String(limit) });
   return request<SearchResponse>(`/search?${qs.toString()}`);
 }
 
