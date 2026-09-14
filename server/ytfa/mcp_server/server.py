@@ -45,6 +45,8 @@ from ytfa.core.search import search_keyword
 from ytfa.core.stats import get_watch_stats as _get_watch_stats
 from ytfa.core.videos import get_video_card, list_feed, set_video_state as _set_video_state
 from ytfa.db import get_connection
+from ytfa.llm.cost import LLMClient
+from ytfa.llm.subagent import summarize_videos_subagent as _summarize_videos_subagent
 from ytfa.rag.embedder import get_embedder
 from ytfa.rag.hybrid import search_hybrid
 from ytfa.rag.vector_search import search_semantic
@@ -209,6 +211,18 @@ def recall(kind: str = "all", query: str | None = None, limit: int = 20) -> dict
     `query`가 있으면 내용 부분일치로 거른다."""
     with get_connection() as conn:
         return _recall(conn, kind=kind, query=query, limit=limit)
+
+
+@mcp.tool()
+@_safe
+def summarize_videos(video_ids: list[str], question: str | None = None) -> dict:
+    """영상 최대 5개를 병렬로 분석한다(비용 발생, Phase 9 step 39).
+
+    `question`이 있으면 각 영상에서 그 질문에 대한 답을, 없으면 일반
+    요약을 낸다. 한 영상이 실패해도(자막 없음 등) 나머지는 정상
+    반환된다 — 결과의 `status`를 영상별로 확인할 것.
+    """
+    return _summarize_videos_subagent(LLMClient(), video_ids, question=question)
 
 
 def main() -> None:
