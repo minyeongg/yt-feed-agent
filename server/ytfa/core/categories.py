@@ -70,3 +70,48 @@ def assign_category_to_channel(conn: Connection, channel_id: str, category_ids: 
         "category_locked": True,
         "assigned_by": "user",
     }
+
+
+def list_channels(
+    conn: Connection,
+    category: str | None = None,
+    needs_review: bool | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """`list_channels` MCP 툴(docs §3.1) — 채널 축약형 목록.
+
+    REST엔 아직 짝이 없다(`GET /channels`는 미구현) — MCP 스펙에만
+    있던 걸 채우는 것이라, 여기서도 REST 응답 형식(`VideoCard`처럼
+    풀 스펙)이 아니라 툴 축약형만 반환한다."""
+    conditions = ["c.subscribed = 1"]
+    params: list = []
+    if category:
+        conditions.append("c.id IN (SELECT channel_id FROM channel_categories WHERE category_id = ?)")
+        params.append(category)
+    if needs_review is not None:
+        conditions.append("c.needs_review = ?")
+        params.append(1 if needs_review else 0)
+
+    sql = (
+        """SELECT c.id, c.title, c.subscriber_count, c.needs_review, c.category_locked,
+                  GROUP_CONCAT(cc.category_id) AS category_ids
+           FROM channels c
+           LEFT JOIN channel_categories cc ON cc.channel_id = c.id
+           WHERE """
+        + " AND ".join(conditions)
+        + " GROUP BY c.id ORDER BY c.title LIMIT ?"
+    )
+    params.append(limit)
+
+    rows = conn.execute(sql, params).fetchall()
+    return [
+        {
+            "id": r[0],
+            "title": r[1],
+            "subscriber_count": r[2],
+            "needs_review": bool(r[3]),
+            "category_locked": bool(r[4]),
+            "category_ids": r[5].split(",") if r[5] else [],
+        }
+        for r in rows
+    ]

@@ -10,15 +10,13 @@
   NOT_FOUND 같은 예상된 실패는 각 함수가 직접 그 모양으로 반환한다.
 - 목록 툴은 `limit` 상한을 두고 축약형을 반환한다.
 
-읽기 툴 7개(list_new_videos, get_video, search_videos,
-get_transcript_excerpt, list_categories, get_watch_stats, recall)는
-`auto_allow`(가만히 둬도 되는 조회)이고, 쓰기 툴 4개(assign_category,
-set_video_state, remember, forget)는 `ask`(사용자 승인) 대상이다
-(docs §3.2) — 다만 그 승인 게이트 자체는 에이전트 레이어(Phase 6
-`agent/permissions.py`)의 책임이라 이 파일은 관여하지 않는다. 15개를
-한 번에 다 만들지 않는다(`list_channels`/`get_cost_summary`/
-`summarize_videos`는 실제로 필요해질 때 추가한다 — remember/recall/
-forget은 Phase 9 step 38에서 추가함).
+읽기 툴 9개(list_new_videos, get_video, search_videos,
+get_transcript_excerpt, list_categories, list_channels, get_watch_stats,
+recall, get_cost_summary)는 `auto_allow`(가만히 둬도 되는 조회)이고,
+쓰기 툴 5개(assign_category, set_video_state, remember, forget,
+summarize_videos)는 `ask`(사용자 승인) 대상이다(docs §3.2) — 다만 그
+승인 게이트 자체는 에이전트 레이어(Phase 6 `agent/permissions.py`)의
+책임이라 이 파일은 관여하지 않는다.
 
 **`mcp<2.0.0`로 고정한 이유**: `mcp` SDK 2.x는 `FastMCP`를 `MCPServer`로
 개명하는 등 API가 바뀌었고, 이 파일은 원래 2.x로 만들어져 있었다. 하지만
@@ -39,13 +37,17 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
-from ytfa.core.categories import assign_category_to_channel, list_categories as _list_categories
+from ytfa.core.categories import (
+    assign_category_to_channel,
+    list_categories as _list_categories,
+    list_channels as _list_channels,
+)
 from ytfa.core.memory import forget as _forget, recall as _recall, remember as _remember
 from ytfa.core.search import search_keyword
 from ytfa.core.stats import get_watch_stats as _get_watch_stats
 from ytfa.core.videos import get_video_card, list_feed, set_video_state as _set_video_state
 from ytfa.db import get_connection
-from ytfa.llm.cost import LLMClient
+from ytfa.llm.cost import LLMClient, cost_summary_detailed as _cost_summary_detailed
 from ytfa.llm.subagent import summarize_videos_subagent as _summarize_videos_subagent
 from ytfa.rag.embedder import get_embedder
 from ytfa.rag.hybrid import search_hybrid
@@ -156,6 +158,25 @@ def list_categories() -> dict:
             for c in items
         ]
     }
+
+
+@mcp.tool()
+@_safe
+def list_channels(category: str | None = None, needs_review: bool | None = None, limit: int = 50) -> dict:
+    """구독 채널 목록(축약형). `needs_review=true`로 자동 분류 확인이 필요한
+    채널만 걸러볼 수 있다."""
+    with get_connection() as conn:
+        items = _list_channels(conn, category=category, needs_review=needs_review, limit=limit)
+    return {"items": items}
+
+
+@mcp.tool()
+@_safe
+def get_cost_summary(since: str = "30d") -> dict:
+    """LLM 사용 비용 요약. `since`: "7d"/"30d" 같은 기간 문자열."""
+    since_days = int(since.rstrip("d")) if since.rstrip("d").isdigit() else 30
+    with get_connection() as conn:
+        return _cost_summary_detailed(conn, since_days=since_days)
 
 
 @mcp.tool()

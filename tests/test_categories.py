@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ytfa.core.categories import assign_category_to_channel, list_categories
+from ytfa.core.categories import assign_category_to_channel, list_categories, list_channels
 from ytfa.db import init_db
 
 
@@ -74,3 +74,52 @@ def test_assign_category_unknown_category_returns_error(conn):
     # 실패했으면 기존 배정을 건드리지 않아야 한다
     links = conn.execute("SELECT category_id FROM channel_categories WHERE channel_id='UC1'").fetchall()
     assert [r[0] for r in links] == ["dev"]
+
+
+def test_list_channels_returns_brief_shape_with_category_ids(conn):
+    items = list_channels(conn)
+
+    assert len(items) == 1
+    assert items[0]["id"] == "UC1"
+    assert items[0]["title"] == "채널1"
+    assert items[0]["category_ids"] == ["dev"]
+    assert items[0]["needs_review"] is False
+    assert items[0]["category_locked"] is False
+
+
+def test_list_channels_filters_by_category(conn):
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("INSERT INTO channels (id, title, added_at) VALUES ('UC2', '채널2', ?)", (now,))
+    conn.commit()
+
+    assert [c["id"] for c in list_channels(conn, category="dev")] == ["UC1"]
+    assert [c["id"] for c in list_channels(conn, category="etc")] == []
+
+
+def test_list_channels_filters_by_needs_review(conn):
+    conn.execute("UPDATE channels SET needs_review = 1 WHERE id = 'UC1'")
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("INSERT INTO channels (id, title, added_at) VALUES ('UC2', '채널2', ?)", (now,))
+    conn.commit()
+
+    assert [c["id"] for c in list_channels(conn, needs_review=True)] == ["UC1"]
+    assert [c["id"] for c in list_channels(conn, needs_review=False)] == ["UC2"]
+
+
+def test_list_channels_excludes_unsubscribed(conn):
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO channels (id, title, added_at, subscribed) VALUES ('UC2', '구독취소', ?, 0)", (now,)
+    )
+    conn.commit()
+
+    assert [c["id"] for c in list_channels(conn)] == ["UC1"]
+
+
+def test_list_channels_respects_limit(conn):
+    now = datetime.now(timezone.utc).isoformat()
+    for i in range(2, 5):
+        conn.execute(f"INSERT INTO channels (id, title, added_at) VALUES ('UC{i}', '채널{i}', ?)", (now,))
+    conn.commit()
+
+    assert len(list_channels(conn, limit=2)) == 2
